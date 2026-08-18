@@ -1,0 +1,14 @@
+bin/
+obj/
+.vs/
+*.user
+.env
+.env.*
+!.env.example
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.pem
+*.key
+
