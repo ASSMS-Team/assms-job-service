@@ -11,4 +11,16 @@ obj/
 *.tfplan
 *.pem
 *.key
-
+[Bb]in/
+[Oo]bj/
+*.suo
+*.userprefs
+TestResults/
+[Cc]overage*/
+*.coverage
+*.coveragexml
+appsettings.Development.json
+publish/
+*.log
+.DS_Store
+Thumbs.db
