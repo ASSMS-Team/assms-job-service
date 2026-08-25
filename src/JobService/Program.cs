@@ -1,6 +1,13 @@
+using JobService.Repositories;
+
 var builder = WebApplication.CreateBuilder(args);
 
+var connectionString = builder.Configuration.GetConnectionString("default")
+    ?? throw new InvalidOperationException("Connection string 'default' was not found.");
+
 // Add services to the container.
+
+builder.Services.AddSingleton<IDbConnectionFactory>(new MySqlConnectionFactory(connectionString));
 
 builder.Services.AddControllers();
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
