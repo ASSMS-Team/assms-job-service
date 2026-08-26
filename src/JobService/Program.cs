@@ -1,3 +1,5 @@
+using System.Reflection;
+
 using JobService.Repositories;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -12,7 +14,13 @@ builder.Services.AddSingleton<IDbConnectionFactory>(new MySqlConnectionFactory(c
 builder.Services.AddControllers();
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(options =>
+{
+    // Built from the assembly name so a project rename does not silently drop
+    // the descriptions; the file sits next to the DLL in the output folder.
+    var xmlFilename = $"{Assembly.GetExecutingAssembly().GetName().Name}.xml";
+    options.IncludeXmlComments(Path.Combine(AppContext.BaseDirectory, xmlFilename));
+});
 
 var app = builder.Build();
 
