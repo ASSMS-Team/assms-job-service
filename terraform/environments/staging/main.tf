@@ -85,6 +85,7 @@ module "vm" {
   resource_group_name  = local.resource_group_name
   location             = var.location
   size                 = var.vm_size
+  source_image_sku     = var.source_image_sku
   admin_username       = var.admin_username
   ssh_public_key       = var.ssh_public_key
   network_interface_id = module.nic.id
