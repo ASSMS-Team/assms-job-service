@@ -1,2 +1,26 @@
-# Placeholder
+environment = "staging"
+location    = "southeastasia"
 
+platform_state_resource_group_name  = "rg-assms-tfstate"
+platform_state_storage_account_name = "stassmstfstateXXXX"
+platform_state_container_name       = "tfstate"
+platform_state_key                  = "platform/staging.tfstate"
+
+vm_name        = "vm-assms-job-staging"
+vm_size        = "Standard_B1ms"
+admin_username = "assmsadmin"
+ssh_public_key = "ssh-ed25519 REPLACE_WITH_YOUR_PUBLIC_KEY"
+
+enable_public_ip = false
+enable_ssh       = false
+enable_http_https = false
+
+ssh_allowed_source_cidrs  = []
+http_allowed_source_cidrs = []
+
+tags = {
+  Project     = "ASSMS"
+  Environment = "staging"
+  Service     = "Job Service"
+  ManagedBy   = "Terraform"
+}

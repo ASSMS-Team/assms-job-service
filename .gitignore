@@ -9,8 +9,11 @@ obj/
 *.tfstate
 *.tfstate.*
 *.tfplan
+terraform.tfvars
+backend.hcl
 *.pem
 *.key
+
 [Bb]in/
 [Oo]bj/
 *.suo
