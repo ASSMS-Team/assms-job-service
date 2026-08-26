@@ -1,0 +1,88 @@
+name: Job Service CI
+
+on:
+  pull_request:
+    branches:
+      - dev
+      - main
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - '*.sln'
+      - '**/*.csproj'
+      - 'Directory.Build.*'
+      - 'global.json'
+      - 'terraform/**'
+      - '.github/workflows/ci.yml'
+  push:
+    branches:
+      - dev
+      - main
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - '*.sln'
+      - '**/*.csproj'
+      - 'Directory.Build.*'
+      - 'global.json'
+      - 'terraform/**'
+      - '.github/workflows/ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  terraform-validation:
+    name: Terraform validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+
+      - name: Check Terraform formatting
+        run: terraform fmt -check -recursive terraform
+
+      - name: Validate staging Terraform
+        run: |
+          terraform -chdir=terraform/environments/staging init -backend=false -input=false -lockfile=readonly
+          terraform -chdir=terraform/environments/staging validate
+
+      - name: Validate production Terraform
+        run: |
+          terraform -chdir=terraform/environments/production init -backend=false -input=false -lockfile=readonly
+          terraform -chdir=terraform/environments/production validate
+
+  dotnet-build-test:
+    name: .NET build and test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore JobService.sln
+
+      - name: Build
+        run: dotnet build JobService.sln --configuration Release --no-restore
+
+      - name: Test with coverage
+        run: dotnet test JobService.sln --configuration Release --no-build --collect:'XPlat Code Coverage' --results-directory TestResults --logger 'trx;LogFileName=test-results.trx'
+
+      - name: Upload test results and coverage
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: job-service-test-results
+          path: TestResults/**
+          if-no-files-found: warn
+          retention-days: 14
