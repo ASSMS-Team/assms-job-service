@@ -52,7 +52,12 @@ variable "vm_name" {
 variable "vm_size" {
   description = "Azure VM size for the service."
   type        = string
-  default     = "Standard_B1ms"
+  default     = "Standard_B2pls_v2"
+}
+variable "source_image_sku" {
+  description = "Canonical Ubuntu image SKU compatible with the selected VM architecture."
+  type        = string
+  default     = "22_04-lts-arm64"
 }
 variable "admin_username" {
   description = "Administrator username for the VM."
@@ -81,7 +86,7 @@ variable "public_ip_name" {
 variable "enable_public_ip" {
   description = "Whether to create a public IP for the service VM."
   type        = bool
-  default     = false
+  default     = true
 }
 variable "enable_ssh" {
   description = "Whether to add an SSH inbound rule."

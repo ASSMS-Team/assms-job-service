@@ -14,6 +14,11 @@ variable "size" {
   description = "Azure VM size."
   type        = string
 }
+variable "source_image_sku" {
+  description = "Canonical Ubuntu image SKU compatible with the selected VM architecture."
+  type        = string
+  default     = "22_04-lts-gen2"
+}
 variable "admin_username" {
   description = "Administrator username for the VM."
   type        = string

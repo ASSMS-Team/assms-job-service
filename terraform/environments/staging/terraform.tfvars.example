@@ -7,11 +7,12 @@ platform_state_container_name       = "tfstate"
 platform_state_key                  = "platform/staging.tfstate"
 
 vm_name        = "vm-assms-job-staging"
-vm_size        = "Standard_B1ms"
+vm_size        = "Standard_B2pls_v2"
+source_image_sku = "22_04-lts-arm64"
 admin_username = "assmsadmin"
 ssh_public_key = "ssh-ed25519 REPLACE_WITH_YOUR_PUBLIC_KEY"
 
-enable_public_ip = false
+enable_public_ip = true
 enable_ssh       = false
 enable_http_https = false
 
