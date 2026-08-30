@@ -1,0 +1,19 @@
+name: Repository ID Probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  repository-id-probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print repository identifiers
+        run: |
+          echo "GITHUB_REPOSITORY=${GITHUB_REPOSITORY}"
+          echo "GITHUB_REPOSITORY_ID=${GITHUB_REPOSITORY_ID}"
+          echo "GITHUB_REPOSITORY_OWNER=${GITHUB_REPOSITORY_OWNER}"
+          echo "GITHUB_REPOSITORY_OWNER_ID=${GITHUB_REPOSITORY_OWNER_ID}"
+          echo "GITHUB_REF=${GITHUB_REF}"
