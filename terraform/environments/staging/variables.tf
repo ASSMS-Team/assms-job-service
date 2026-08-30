@@ -83,6 +83,12 @@ variable "public_ip_name" {
   type        = string
   default     = "pip-assms-job-staging"
 }
+variable "public_ip_domain_name_label" {
+  description = "Optional Azure Public IP DNS label for the staging API endpoint."
+  type        = string
+  default     = null
+  nullable    = true
+}
 variable "enable_public_ip" {
   description = "Whether to create a public IP for the service VM."
   type        = bool
@@ -108,13 +114,9 @@ variable "enable_http_https" {
   default     = false
 }
 variable "http_allowed_source_cidrs" {
-  description = "CIDRs allowed to connect over HTTP/HTTPS when enabled."
+  description = "CIDRs allowed to connect over HTTP/HTTPS when enabled. Public HTTP/HTTPS is permitted for the staging reverse proxy; port 8080 remains private."
   type        = list(string)
   default     = []
-  validation {
-    condition     = alltrue([for cidr in var.http_allowed_source_cidrs : cidr != "0.0.0.0/0"])
-    error_message = "Unrestricted HTTP/HTTPS access from 0.0.0.0/0 is not permitted."
-  }
 }
 variable "tags" {
   description = "Tags applied to service infrastructure."

@@ -14,10 +14,11 @@ ssh_public_key = "ssh-ed25519 REPLACE_WITH_YOUR_PUBLIC_KEY"
 
 enable_public_ip = true
 enable_ssh       = false
-enable_http_https = false
+enable_http_https = true
 
 ssh_allowed_source_cidrs  = []
-http_allowed_source_cidrs = []
+http_allowed_source_cidrs = ["0.0.0.0/0"]
+public_ip_domain_name_label = "assms-job-staging-REPLACE_WITH_UNIQUE_SUFFIX"
 
 tags = {
   Project     = "ASSMS"
