@@ -10,6 +10,12 @@ variable "location" {
   description = "Azure region for the public IP."
   type        = string
 }
+variable "domain_name_label" {
+  description = "Optional Azure Public IP DNS label."
+  type        = string
+  default     = null
+  nullable    = true
+}
 variable "tags" {
   description = "Tags applied to the public IP."
   type        = map(string)
