@@ -1,2 +1,3 @@
-# Placeholder
-
+terraform {
+  backend "azurerm" {}
+}
