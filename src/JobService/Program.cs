@@ -16,6 +16,8 @@ var connectionString = builder.Configuration.GetConnectionString("default")
 // so neither may be hard-coded - staging and production point elsewhere.
 var customerServiceBaseUrl = builder.Configuration["CustomerService:BaseUrl"]
     ?? throw new InvalidOperationException("Configuration value 'CustomerService:BaseUrl' was not found.");
+var customerServiceInternalKey = builder.Configuration["CustomerService:InternalServiceKey"]
+    ?? throw new InvalidOperationException("Configuration value 'CustomerService:InternalServiceKey' was not found.");
 
 var kafkaBootstrapServers = builder.Configuration["Kafka:BootstrapServers"]
     ?? throw new InvalidOperationException("Configuration value 'Kafka:BootstrapServers' was not found.");
@@ -60,6 +62,7 @@ builder.Services.AddHttpClient<IAssetValidationClient, AssetValidationClient>(cl
     // The trailing slash matters: without it the last path segment of a base
     // address would be replaced by the relative path rather than extended.
     client.BaseAddress = new Uri(customerServiceBaseUrl.TrimEnd('/') + "/");
+    client.DefaultRequestHeaders.Add("X-ASSMS-Service-Key", customerServiceInternalKey);
 });
 
 // Singleton: building a producer opens sockets and starts a background thread,
