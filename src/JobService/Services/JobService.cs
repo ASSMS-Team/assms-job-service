@@ -103,6 +103,12 @@ public class JobService
         return job is null ? null : MapToResponse(job);
     }
 
+    public async Task<IReadOnlyList<JobResponse>> ListAsync(string? status, string? assignedTechnicianId)
+    {
+        var jobs = await _repository.ListAsync(status, assignedTechnicianId);
+        return jobs.Select(MapToResponse).ToList();
+    }
+
     // Generates a reference and inserts, treating a duplicate-key failure as a
     // reason to draw a new reference rather than as an error. The unique index
     // is what detects the collision - there is no pre-check, because two
@@ -201,6 +207,16 @@ public class JobService
         ScheduledDate = job.ScheduledDate,
         CreatedBy = job.CreatedBy,
         Status = job.Status,
+        Assignment = job.AssignmentId is null || job.AssignedTechnicianId is null
+            || job.AssignedTechnicianReference is null || job.AssignedAt is null
+            ? null
+            : new JobAssignmentResponse
+            {
+                Id = job.AssignmentId,
+                TechnicianId = job.AssignedTechnicianId,
+                TechnicianReference = job.AssignedTechnicianReference,
+                AssignedAt = job.AssignedAt.Value
+            },
         CreatedAt = job.CreatedAt,
         UpdatedAt = job.UpdatedAt
     };

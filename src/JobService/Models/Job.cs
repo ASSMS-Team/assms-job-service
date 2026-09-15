@@ -36,6 +36,16 @@ public class Job
 
     public string Status { get; set; } = string.Empty;
 
+    // Local projection of Dispatch's JobAssigned event. These facts are read
+    // from jobdb only; Job Service never queries Dispatch's database.
+    public string? AssignmentId { get; set; }
+
+    public string? AssignedTechnicianId { get; set; }
+
+    public string? AssignedTechnicianReference { get; set; }
+
+    public DateTime? AssignedAt { get; set; }
+
     public DateTime CreatedAt { get; set; }
 
     public DateTime UpdatedAt { get; set; }

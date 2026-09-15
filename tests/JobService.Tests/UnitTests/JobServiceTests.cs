@@ -357,4 +357,52 @@ public class JobServiceTests
 
         Assert.Equal("55555555-5555-5555-5555-555555555555", found!.Id);
     }
+
+    [Fact]
+    public async Task ListAsync_MapsTheLocalAssignmentProjection_AndPassesBothFilters()
+    {
+        var technicianId = "66666666-6666-6666-6666-666666666666";
+        var repository = new FakeJobRepository
+        {
+            JobsToReturn = new[]
+            {
+                new Job
+                {
+                    Id = "55555555-5555-5555-5555-555555555555",
+                    JobReference = "JOB-7K2M9X",
+                    Priority = "HIGH",
+                    Status = "ASSIGNED",
+                    AssignmentId = "77777777-7777-7777-7777-777777777777",
+                    AssignedTechnicianId = technicianId,
+                    AssignedTechnicianReference = "TEC-032",
+                    AssignedAt = new DateTime(2026, 9, 15, 9, 0, 0, DateTimeKind.Utc)
+                }
+            }
+        };
+        var service = BuildService(repository, new FakeAssetValidationClient(), new FakeEventPublisher());
+
+        var jobs = await service.ListAsync("ASSIGNED", technicianId);
+
+        Assert.Equal("ASSIGNED", repository.ListStatus);
+        Assert.Equal(technicianId, repository.ListAssignedTechnicianId);
+        var job = Assert.Single(jobs);
+        Assert.Equal("JOB-7K2M9X", job.JobReference);
+        Assert.Equal("ASSIGNED", job.Status);
+        Assert.NotNull(job.Assignment);
+        Assert.Equal("TEC-032", job.Assignment!.TechnicianReference);
+    }
+
+    [Fact]
+    public async Task ListAsync_LeavesAssignmentNull_ForAnUnassignedJob()
+    {
+        var repository = new FakeJobRepository
+        {
+            JobsToReturn = new[] { new Job { Id = "55555555-5555-5555-5555-555555555555", JobReference = "JOB-7K2M9X", Status = "CREATED" } }
+        };
+        var service = BuildService(repository, new FakeAssetValidationClient(), new FakeEventPublisher());
+
+        var job = Assert.Single(await service.ListAsync(null, null));
+
+        Assert.Null(job.Assignment);
+    }
 }

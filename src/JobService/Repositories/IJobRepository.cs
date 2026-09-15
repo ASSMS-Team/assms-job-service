@@ -15,6 +15,9 @@ public interface IJobRepository
 
     Task<Job?> GetByIdAsync(string id);
 
+    /// <summary>Lists Job Service-owned rows, optionally narrowed by status and locally projected technician id.</summary>
+    Task<IReadOnlyList<Job>> ListAsync(string? status, string? assignedTechnicianId);
+
     // Records the assignment Dispatch published: the technician, the assignment,
     // the time, and the status the job takes as a result. Driven only by a
     // JobAssigned event - this service does not decide assignments.
