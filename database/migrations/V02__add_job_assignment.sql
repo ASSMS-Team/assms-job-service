@@ -20,50 +20,17 @@
 -- assignments in the same second indistinguishable - collapsing exactly the
 -- comparison that guard depends on.
 --
--- MySQL 8 has no ADD COLUMN IF NOT EXISTS, so unlike the CREATE TABLE migrations
--- this file cannot be made re-runnable by syntax alone. Each statement is
--- therefore guarded against information_schema and prepared only when it is
--- actually needed, which keeps the same "safe to run twice" property the rest of
--- the migration set has.
-
-SET @ddl := (
-    SELECT IF(
-        COUNT(*) = 0,
-        'ALTER TABLE jobs
-            ADD COLUMN assignment_id                  CHAR(36)     NULL,
-            ADD COLUMN assigned_technician_id         CHAR(36)     NULL,
-            ADD COLUMN assigned_technician_reference  VARCHAR(30)  NULL,
-            ADD COLUMN assigned_at                    TIMESTAMP(6) NULL',
-        'DO 0'
-    )
-    FROM information_schema.COLUMNS
-    WHERE TABLE_SCHEMA = DATABASE()
-      AND TABLE_NAME = 'jobs'
-      AND COLUMN_NAME = 'assignment_id'
-);
-
-PREPARE stmt FROM @ddl;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
-
--- Listing the jobs one technician is carrying. Reporting answers this across all
--- jobs from its own projection, but the Job Service is asked it about a single
--- technician often enough that a full scan of jobs is the wrong answer.
-SET @ddl := (
-    SELECT IF(
-        COUNT(*) = 0,
-        'ALTER TABLE jobs ADD KEY idx_jobs_assigned_technician_id (assigned_technician_id)',
-        'DO 0'
-    )
-    FROM information_schema.STATISTICS
-    WHERE TABLE_SCHEMA = DATABASE()
-      AND TABLE_NAME = 'jobs'
-      AND INDEX_NAME = 'idx_jobs_assigned_technician_id'
-);
-
-PREPARE stmt FROM @ddl;
-EXECUTE stmt;
-DEALLOCATE PREPARE stmt;
+-- This is one atomic MySQL ALTER TABLE operation. The migration runner records
+-- V02 only after this statement succeeds, so a failed deployment retries the
+-- whole change without leaving individual columns or the index half-applied.
+-- Avoiding session variables also keeps this migration compatible with the
+-- MySqlConnector default (AllowUserVariables=false).
+ALTER TABLE jobs
+    ADD COLUMN assignment_id                  CHAR(36)     NULL,
+    ADD COLUMN assigned_technician_id         CHAR(36)     NULL,
+    ADD COLUMN assigned_technician_reference  VARCHAR(30)  NULL,
+    ADD COLUMN assigned_at                    TIMESTAMP(6) NULL,
+    ADD KEY idx_jobs_assigned_technician_id (assigned_technician_id);
 
 -- Note on status: the jobs table deliberately carries no CHECK constraint on
 -- status, so ASSIGNED needs no schema change to become a legal value. That was

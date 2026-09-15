@@ -357,6 +357,41 @@ public class JobAssignedConsumerTests
         Assert.Empty(kafka.SeekedOffsets);
     }
 
+    [Theory]
+    [InlineData("not-a-guid", "JobAssigned", 1, "dispatch-service")]
+    [InlineData("7b41e9c6-0d38-4a52-9f17-3c8b6e2d5a04", "JobCreated", 1, "dispatch-service")]
+    [InlineData("7b41e9c6-0d38-4a52-9f17-3c8b6e2d5a04", "JobAssigned", 2, "dispatch-service")]
+    [InlineData("7b41e9c6-0d38-4a52-9f17-3c8b6e2d5a04", "JobAssigned", 1, "job-service")]
+    public void IsUsable_RequiresTheExpectedEnvelopeIdentity(
+        string eventId,
+        string eventType,
+        int eventVersion,
+        string producer)
+    {
+        var envelope = JobAssignedConsumer.Deserialize(ValidMessage())!;
+        envelope.EventId = eventId;
+        envelope.EventType = eventType;
+        envelope.EventVersion = eventVersion;
+        envelope.Producer = producer;
+
+        Assert.False(JobAssignedConsumer.IsUsable(envelope, JobId));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WhenKafkaKeyDoesNotMatchThePayload_CommitsPastItWithoutWriting()
+    {
+        using var cts = new CancellationTokenSource();
+        var kafka = new FakeKafkaConsumer();
+        var repository = new FakeJobRepository();
+        var message = kafka.Enqueue(ValidMessage(), key: "a-different-job-id");
+
+        await RunAsync(cts, kafka, repository);
+
+        Assert.Empty(repository.AppliedAssignments);
+        Assert.Equal(message.TopicPartitionOffset, Assert.Single(kafka.CommittedOffsets));
+        Assert.Empty(kafka.SeekedOffsets);
+    }
+
     // ---- transient database failure: seek and retry ------------------------
 
     [Fact]

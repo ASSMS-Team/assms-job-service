@@ -146,7 +146,7 @@ public class JobAssignedConsumer : BackgroundService
                     continue;
                 }
 
-                if (!IsUsable(envelope))
+                if (!IsUsable(envelope, message.Message.Key))
                 {
                     // Valid JSON, but not an event this loop can act on: a bare
                     // null, an envelope with no payload, or one missing a field
@@ -212,17 +212,26 @@ public class JobAssignedConsumer : BackgroundService
     internal static EventEnvelope<JobAssignedPayload>? Deserialize(string value) =>
         JsonSerializer.Deserialize<EventEnvelope<JobAssignedPayload>>(value, SerializerOptions);
 
-    // Every field named here is one the UPDATE cannot be written without, which
-    // is why an event missing any of them is discarded rather than retried.
+    // Every field named here is either part of the contracted event identity or
+    // one the UPDATE cannot be written without. A malformed event is committed
+    // past because retrying cannot make those facts appear.
     // JobReference is not checked: the job row already holds it, and this service
     // does not overwrite it from the event.
-    internal static bool IsUsable(EventEnvelope<JobAssignedPayload>? envelope) =>
+    internal static bool IsUsable(EventEnvelope<JobAssignedPayload>? envelope, string? messageKey) =>
         envelope?.Payload is not null
-        && !string.IsNullOrWhiteSpace(envelope.Payload.JobId)
-        && !string.IsNullOrWhiteSpace(envelope.Payload.AssignmentId)
-        && !string.IsNullOrWhiteSpace(envelope.Payload.TechnicianId)
+        && Guid.TryParse(envelope.EventId, out _)
+        && string.Equals(envelope.EventType, JobAssignedPayload.EventType, StringComparison.Ordinal)
+        && envelope.EventVersion == JobAssignedPayload.EventVersion
+        && string.Equals(envelope.Producer, JobAssignedPayload.Producer, StringComparison.Ordinal)
+        && envelope.OccurredAt != default
+        && envelope.OccurredAt.Kind == DateTimeKind.Utc
+        && Guid.TryParse(envelope.Payload.JobId, out _)
+        && Guid.TryParse(envelope.Payload.AssignmentId, out _)
+        && Guid.TryParse(envelope.Payload.TechnicianId, out _)
         && !string.IsNullOrWhiteSpace(envelope.Payload.TechnicianReference)
-        && envelope.Payload.AssignedAt != default;
+        && envelope.Payload.AssignedAt != default
+        && envelope.Payload.AssignedAt.Kind == DateTimeKind.Utc
+        && string.Equals(messageKey, envelope.Payload.JobId, StringComparison.Ordinal);
 
     // The repository is scoped and this class is a singleton, so it cannot be
     // taken in the constructor: a scoped dependency resolved once would outlive

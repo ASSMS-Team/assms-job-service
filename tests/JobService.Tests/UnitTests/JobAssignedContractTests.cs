@@ -162,12 +162,12 @@ public class JobAssignedContractTests
     [InlineData("""{"eventId":"a","eventType":"JobAssigned"}""")]
     public void IsUsable_OfAnEventWithNoPayload_IsFalse(string body)
     {
-        Assert.False(JobAssignedConsumer.IsUsable(JobAssignedConsumer.Deserialize(body)));
+        Assert.False(JobAssignedConsumer.IsUsable(JobAssignedConsumer.Deserialize(body), "9f1c7a24-8f4e-4c3a-9a52-2b6d0f5e1a77"));
     }
 
     [Fact]
     public void IsUsable_OfTheFullPublishedMessage_IsTrue()
     {
-        Assert.True(JobAssignedConsumer.IsUsable(JobAssignedConsumer.Deserialize(PublishedMessage)));
+        Assert.True(JobAssignedConsumer.IsUsable(JobAssignedConsumer.Deserialize(PublishedMessage), "9f1c7a24-8f4e-4c3a-9a52-2b6d0f5e1a77"));
     }
 }

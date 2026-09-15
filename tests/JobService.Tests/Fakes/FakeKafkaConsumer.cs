@@ -34,7 +34,7 @@ public class FakeKafkaConsumer : IConsumer<string, string>
 
     // Queues a message the loop will be handed, at its own offset. Offsets ascend
     // from zero so a Commit or a Seek can be tied to the message it came from.
-    public ConsumeResult<string, string> Enqueue(string value, string key = "test-job")
+    public ConsumeResult<string, string> Enqueue(string value, string key = "9f1c7a24-8f4e-4c3a-9a52-2b6d0f5e1a77")
     {
         var result = new ConsumeResult<string, string>
         {

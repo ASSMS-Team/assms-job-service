@@ -27,6 +27,8 @@ public class JobAssignedPayload
 
     public const string EventType = "JobAssigned";
 
+    public const string Producer = "dispatch-service";
+
     // First version of this payload. It goes up only if a field is removed,
     // renamed, retyped, or changes meaning.
     public const int EventVersion = 1;
