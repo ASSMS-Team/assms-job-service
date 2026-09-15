@@ -38,9 +38,24 @@ public class JobResponse
     /// <summary>Lifecycle status of the job. Newly created jobs are CREATED.</summary>
     public string Status { get; set; } = string.Empty;
 
+    /// <summary>Locally synchronized assignment context, or null until Dispatch assigns the job.</summary>
+    public JobAssignmentResponse? Assignment { get; set; }
+
     /// <summary>Database timestamp for when the job was created.</summary>
     public DateTime CreatedAt { get; set; }
 
     /// <summary>Database timestamp for when the job was last modified.</summary>
     public DateTime UpdatedAt { get; set; }
+}
+
+/// <summary>Assignment facts published by Dispatch and stored locally in jobdb.</summary>
+public class JobAssignmentResponse
+{
+    public string Id { get; set; } = string.Empty;
+
+    public string TechnicianId { get; set; } = string.Empty;
+
+    public string TechnicianReference { get; set; } = string.Empty;
+
+    public DateTime AssignedAt { get; set; }
 }

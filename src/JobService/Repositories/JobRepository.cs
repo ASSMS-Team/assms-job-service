@@ -11,7 +11,8 @@ public class JobRepository : IJobRepository
     private const string SelectColumns = @"
             SELECT id, job_reference, customer_id, asset_id, service_category,
                    problem_description, priority, region, scheduled_date,
-                   created_by, status, created_at, updated_at
+                   created_by, status, assignment_id, assigned_technician_id,
+                   assigned_technician_reference, assigned_at, created_at, updated_at
             FROM jobs";
 
     private readonly IDbConnectionFactory _connectionFactory;
@@ -145,6 +146,36 @@ public class JobRepository : IJobRepository
         return await ReadSingleAsync(command);
     }
 
+    public async Task<IReadOnlyList<Job>> ListAsync(string? status, string? assignedTechnicianId)
+    {
+        await using var connection = _connectionFactory.CreateConnection();
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        var predicates = new List<string>();
+
+        if (status is not null)
+        {
+            predicates.Add("status = @status");
+            command.Parameters.AddWithValue("@status", status);
+        }
+
+        if (assignedTechnicianId is not null)
+        {
+            predicates.Add("assigned_technician_id = @assignedTechnicianId");
+            command.Parameters.AddWithValue("@assignedTechnicianId", assignedTechnicianId);
+        }
+
+        command.CommandText = SelectColumns
+            + (predicates.Count == 0 ? string.Empty : " WHERE " + string.Join(" AND ", predicates))
+            + " ORDER BY created_at DESC, job_reference ASC;";
+
+        await using var reader = (MySqlDataReader)await command.ExecuteReaderAsync();
+        var jobs = new List<Job>();
+        while (await reader.ReadAsync()) jobs.Add(Read(reader));
+        return jobs;
+    }
+
     private static async Task<Job?> ReadSingleAsync(MySqlCommand command)
     {
         await using var reader = (MySqlDataReader)await command.ExecuteReaderAsync();
@@ -154,6 +185,11 @@ public class JobRepository : IJobRepository
             return null;
         }
 
+        return Read(reader);
+    }
+
+    private static Job Read(MySqlDataReader reader)
+    {
         // Ordinals are looked up by name so that reordering the SELECT list
         // cannot silently shift the mapping.
         var idOrdinal = reader.GetOrdinal("id");
@@ -167,6 +203,10 @@ public class JobRepository : IJobRepository
         var scheduledDateOrdinal = reader.GetOrdinal("scheduled_date");
         var createdByOrdinal = reader.GetOrdinal("created_by");
         var statusOrdinal = reader.GetOrdinal("status");
+        var assignmentIdOrdinal = reader.GetOrdinal("assignment_id");
+        var assignedTechnicianIdOrdinal = reader.GetOrdinal("assigned_technician_id");
+        var assignedTechnicianReferenceOrdinal = reader.GetOrdinal("assigned_technician_reference");
+        var assignedAtOrdinal = reader.GetOrdinal("assigned_at");
         var createdAtOrdinal = reader.GetOrdinal("created_at");
         var updatedAtOrdinal = reader.GetOrdinal("updated_at");
 
@@ -190,6 +230,10 @@ public class JobRepository : IJobRepository
                 : reader.GetFieldValue<DateOnly>(scheduledDateOrdinal),
             CreatedBy = reader.GetValue(createdByOrdinal)?.ToString() ?? string.Empty,
             Status = reader.GetString(statusOrdinal),
+            AssignmentId = reader.IsDBNull(assignmentIdOrdinal) ? null : reader.GetValue(assignmentIdOrdinal).ToString(),
+            AssignedTechnicianId = reader.IsDBNull(assignedTechnicianIdOrdinal) ? null : reader.GetValue(assignedTechnicianIdOrdinal).ToString(),
+            AssignedTechnicianReference = reader.IsDBNull(assignedTechnicianReferenceOrdinal) ? null : reader.GetString(assignedTechnicianReferenceOrdinal),
+            AssignedAt = reader.IsDBNull(assignedAtOrdinal) ? null : reader.GetDateTime(assignedAtOrdinal),
             CreatedAt = reader.GetDateTime(createdAtOrdinal),
             UpdatedAt = reader.GetDateTime(updatedAtOrdinal)
         };

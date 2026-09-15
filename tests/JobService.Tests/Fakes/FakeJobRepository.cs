@@ -27,6 +27,9 @@ public class FakeJobRepository : IJobRepository
     public Job? JobToReturn;
     public string? GetByIdId;
     public string? GetByReferenceJobReference;
+    public IReadOnlyList<Job> JobsToReturn = Array.Empty<Job>();
+    public string? ListStatus;
+    public string? ListAssignedTechnicianId;
 
     public Task CreateAsync(Job job)
     {
@@ -57,6 +60,13 @@ public class FakeJobRepository : IJobRepository
         GetByReferenceJobReference = jobReference;
 
         return Task.FromResult(JobToReturn);
+    }
+
+    public Task<IReadOnlyList<Job>> ListAsync(string? status, string? assignedTechnicianId)
+    {
+        ListStatus = status;
+        ListAssignedTechnicianId = assignedTechnicianId;
+        return Task.FromResult(JobsToReturn);
     }
 
     // ApplyAssignmentAsync - what the JobAssigned consumer calls. Every call is
