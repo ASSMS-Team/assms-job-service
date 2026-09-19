@@ -27,6 +27,9 @@ public class FakeJobRepository : IJobRepository
     public Job? JobToReturn;
     public string? GetByIdId;
     public string? GetByReferenceJobReference;
+    public IReadOnlyList<Job> JobsToReturn = Array.Empty<Job>();
+    public string? ListStatus;
+    public string? ListAssignedTechnicianId;
 
     public Task CreateAsync(Job job)
     {
@@ -58,4 +61,80 @@ public class FakeJobRepository : IJobRepository
 
         return Task.FromResult(JobToReturn);
     }
+
+    public Task<IReadOnlyList<Job>> ListAsync(string? status, string? assignedTechnicianId)
+    {
+        ListStatus = status;
+        ListAssignedTechnicianId = assignedTechnicianId;
+        return Task.FromResult(JobsToReturn);
+    }
+
+    // ApplyAssignmentAsync - what the JobAssigned consumer calls. Every call is
+    // recorded in order rather than only the last, because the redelivery tests
+    // turn on how many times the write was attempted and with what.
+    public readonly List<AppliedAssignment> AppliedAssignments = new();
+
+    public int ApplyAssignmentAsyncCallCount;
+
+    // What the fake reports back. True by default, standing in for a row that was
+    // there and was changed. Set false to exercise the branch where the real
+    // UPDATE matches nothing - the event was already applied, it is older than
+    // what is stored, or no such job exists here.
+    public bool ApplyAssignmentResult = true;
+
+    // Left null for the happy path. Set it to stand in for the database being
+    // unreachable, which is the failure the consumer must retry rather than
+    // commit past.
+    public Exception? ApplyAssignmentExceptionToThrow;
+
+    // How many opening calls throw before one is allowed to succeed. Zero, the
+    // default, never fails. Anything higher stands in for a database that was
+    // down and came back, which is the case the seek-and-retry exists for.
+    public int ApplyAssignmentFailuresBeforeSuccess;
+
+    // Runs after the call is recorded and before the throw. The consumer tests
+    // use it to cancel the host token at the moment of failure, so the loop
+    // unwinds instead of sleeping out its retry delay.
+    public Action? OnApplyAssignment;
+
+    public Task<bool> ApplyAssignmentAsync(
+        string jobId,
+        string assignmentId,
+        string technicianId,
+        string technicianReference,
+        string status,
+        DateTime assignedAt)
+    {
+        // Recorded and counted before the throw, so a test that configures a
+        // failure can still assert on what the write was given.
+        AppliedAssignments.Add(
+            new AppliedAssignment(jobId, assignmentId, technicianId, technicianReference, status, assignedAt));
+        ApplyAssignmentAsyncCallCount++;
+
+        OnApplyAssignment?.Invoke();
+
+        if (ApplyAssignmentAsyncCallCount <= ApplyAssignmentFailuresBeforeSuccess)
+        {
+            throw ApplyAssignmentExceptionToThrow
+                ?? new InvalidOperationException("The database was unreachable.");
+        }
+
+        if (ApplyAssignmentExceptionToThrow is not null)
+        {
+            throw ApplyAssignmentExceptionToThrow;
+        }
+
+        return Task.FromResult(ApplyAssignmentResult);
+    }
 }
+
+// One recorded ApplyAssignmentAsync call. A record rather than the Job model:
+// these are the arguments the consumer mapped out of an event, and asserting on
+// them is how the mapping is pinned.
+public record AppliedAssignment(
+    string JobId,
+    string AssignmentId,
+    string TechnicianId,
+    string TechnicianReference,
+    string Status,
+    DateTime AssignedAt);

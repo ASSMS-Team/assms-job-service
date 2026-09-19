@@ -11,7 +11,8 @@ public class JobRepository : IJobRepository
     private const string SelectColumns = @"
             SELECT id, job_reference, customer_id, asset_id, service_category,
                    problem_description, priority, region, scheduled_date,
-                   created_by, status, created_at, updated_at
+                   created_by, status, assignment_id, assigned_technician_id,
+                   assigned_technician_reference, assigned_at, created_at, updated_at
             FROM jobs";
 
     private readonly IDbConnectionFactory _connectionFactory;
@@ -57,6 +58,64 @@ public class JobRepository : IJobRepository
         await command.ExecuteNonQueryAsync();
     }
 
+    public async Task<bool> ApplyAssignmentAsync(
+        string jobId,
+        string assignmentId,
+        string technicianId,
+        string technicianReference,
+        string status,
+        DateTime assignedAt)
+    {
+        await using var connection = _connectionFactory.CreateConnection();
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        // The second half of the WHERE clause is the whole guard, and it does two
+        // jobs at once.
+        //
+        // Duplicate safety: a redelivered JobAssigned carries the same assignedAt
+        // as the delivery that already landed, so the strict < is false, no row
+        // matches, and nothing is written twice. Kafka delivers at least once and
+        // the consumer commits its offset after this call, so a redelivery is
+        // guaranteed to happen eventually - it has to be harmless.
+        //
+        // Stale-event protection: an older assignment arriving after a newer one
+        // is refused for the same reason. Within one job that cannot happen
+        // today, because every event about a job is keyed by jobId and therefore
+        // ordered inside its partition - but it becomes possible the moment US-15
+        // allows reassignment and someone replays the topic from the beginning.
+        // Ordering by the event's own timestamp rather than by arrival means the
+        // row ends up carrying the latest assignment either way.
+        //
+        // Comparing timestamps rather than checking assignment_id is deliberate.
+        // An id comparison can only answer "is this the same event", which stops
+        // a duplicate but cannot tell an older assignment from a newer one.
+        //
+        // updated_at is not written here - the column's ON UPDATE clause moves it
+        // whenever any of these columns actually changes, and naming it would be
+        // a second place to keep that in step.
+        command.CommandText = @"
+            UPDATE jobs
+            SET status                        = @status,
+                assignment_id                 = @assignmentId,
+                assigned_technician_id        = @technicianId,
+                assigned_technician_reference = @technicianReference,
+                assigned_at                   = @assignedAt
+            WHERE id = @jobId
+              AND (assigned_at IS NULL OR assigned_at < @assignedAt);";
+
+        command.Parameters.AddWithValue("@jobId", jobId);
+        command.Parameters.AddWithValue("@assignmentId", assignmentId);
+        command.Parameters.AddWithValue("@technicianId", technicianId);
+        command.Parameters.AddWithValue("@technicianReference", technicianReference);
+        command.Parameters.AddWithValue("@status", status);
+        command.Parameters.AddWithValue("@assignedAt", assignedAt);
+
+        var rowsAffected = await command.ExecuteNonQueryAsync();
+
+        return rowsAffected > 0;
+    }
+
     public async Task<Job?> GetByIdAsync(string id)
     {
         await using var connection = _connectionFactory.CreateConnection();
@@ -87,6 +146,36 @@ public class JobRepository : IJobRepository
         return await ReadSingleAsync(command);
     }
 
+    public async Task<IReadOnlyList<Job>> ListAsync(string? status, string? assignedTechnicianId)
+    {
+        await using var connection = _connectionFactory.CreateConnection();
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        var predicates = new List<string>();
+
+        if (status is not null)
+        {
+            predicates.Add("status = @status");
+            command.Parameters.AddWithValue("@status", status);
+        }
+
+        if (assignedTechnicianId is not null)
+        {
+            predicates.Add("assigned_technician_id = @assignedTechnicianId");
+            command.Parameters.AddWithValue("@assignedTechnicianId", assignedTechnicianId);
+        }
+
+        command.CommandText = SelectColumns
+            + (predicates.Count == 0 ? string.Empty : " WHERE " + string.Join(" AND ", predicates))
+            + " ORDER BY created_at DESC, job_reference ASC;";
+
+        await using var reader = (MySqlDataReader)await command.ExecuteReaderAsync();
+        var jobs = new List<Job>();
+        while (await reader.ReadAsync()) jobs.Add(Read(reader));
+        return jobs;
+    }
+
     private static async Task<Job?> ReadSingleAsync(MySqlCommand command)
     {
         await using var reader = (MySqlDataReader)await command.ExecuteReaderAsync();
@@ -96,6 +185,11 @@ public class JobRepository : IJobRepository
             return null;
         }
 
+        return Read(reader);
+    }
+
+    private static Job Read(MySqlDataReader reader)
+    {
         // Ordinals are looked up by name so that reordering the SELECT list
         // cannot silently shift the mapping.
         var idOrdinal = reader.GetOrdinal("id");
@@ -109,6 +203,10 @@ public class JobRepository : IJobRepository
         var scheduledDateOrdinal = reader.GetOrdinal("scheduled_date");
         var createdByOrdinal = reader.GetOrdinal("created_by");
         var statusOrdinal = reader.GetOrdinal("status");
+        var assignmentIdOrdinal = reader.GetOrdinal("assignment_id");
+        var assignedTechnicianIdOrdinal = reader.GetOrdinal("assigned_technician_id");
+        var assignedTechnicianReferenceOrdinal = reader.GetOrdinal("assigned_technician_reference");
+        var assignedAtOrdinal = reader.GetOrdinal("assigned_at");
         var createdAtOrdinal = reader.GetOrdinal("created_at");
         var updatedAtOrdinal = reader.GetOrdinal("updated_at");
 
@@ -132,6 +230,10 @@ public class JobRepository : IJobRepository
                 : reader.GetFieldValue<DateOnly>(scheduledDateOrdinal),
             CreatedBy = reader.GetValue(createdByOrdinal)?.ToString() ?? string.Empty,
             Status = reader.GetString(statusOrdinal),
+            AssignmentId = reader.IsDBNull(assignmentIdOrdinal) ? null : reader.GetValue(assignmentIdOrdinal).ToString(),
+            AssignedTechnicianId = reader.IsDBNull(assignedTechnicianIdOrdinal) ? null : reader.GetValue(assignedTechnicianIdOrdinal).ToString(),
+            AssignedTechnicianReference = reader.IsDBNull(assignedTechnicianReferenceOrdinal) ? null : reader.GetString(assignedTechnicianReferenceOrdinal),
+            AssignedAt = reader.IsDBNull(assignedAtOrdinal) ? null : reader.GetDateTime(assignedAtOrdinal),
             CreatedAt = reader.GetDateTime(createdAtOrdinal),
             UpdatedAt = reader.GetDateTime(updatedAtOrdinal)
         };

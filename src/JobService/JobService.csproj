@@ -12,6 +12,26 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- The consume loop's failure handling is the part of the JobAssigned
+         consumer most worth testing and the part hardest to reach: it decides
+         whether to commit past a message or seek back to it, and that decision is
+         not visible from any public surface. The test project is given the
+         internal seams that make it reachable - a consumer factory and the
+         deserializer - rather than the loop being left unverified. The Reporting
+         and Dispatch services expose the same seams for the same reason. -->
+    <InternalsVisibleTo Include="JobService.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Published next to the DLL so JobMigrationRunner can find them inside the
+         container. Dispatch and Reporting package their migrations the same way;
+         without this the runner has an empty folder and applies nothing. -->
+    <Content Include="..\..\database\migrations\*.sql"
+             Link="migrations\%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Confluent.Kafka" Version="2.15.0" />
     <PackageReference Include="MySqlConnector" Version="2.6.2" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.6.2" />

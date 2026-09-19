@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Net;
 using System.Text.Json;
 
+using JobService.Messaging.Consumers;
 using JobService.Messaging.Producers;
 using JobService.Repositories;
 using JobService.Services;
@@ -16,6 +17,8 @@ var connectionString = builder.Configuration.GetConnectionString("default")
 // so neither may be hard-coded - staging and production point elsewhere.
 var customerServiceBaseUrl = builder.Configuration["CustomerService:BaseUrl"]
     ?? throw new InvalidOperationException("Configuration value 'CustomerService:BaseUrl' was not found.");
+var customerServiceInternalKey = builder.Configuration["CustomerService:InternalServiceKey"]
+    ?? throw new InvalidOperationException("Configuration value 'CustomerService:InternalServiceKey' was not found.");
 
 var kafkaBootstrapServers = builder.Configuration["Kafka:BootstrapServers"]
     ?? throw new InvalidOperationException("Configuration value 'Kafka:BootstrapServers' was not found.");
@@ -47,6 +50,7 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 });
 
 builder.Services.AddSingleton<IDbConnectionFactory>(new MySqlConnectionFactory(connectionString));
+builder.Services.AddScoped<JobMigrationRunner>();
 builder.Services.AddScoped<IJobRepository, JobRepository>();
 // Qualified: the class shares its name with the root namespace, so the bare
 // name would bind to the namespace and not compile.
@@ -60,6 +64,7 @@ builder.Services.AddHttpClient<IAssetValidationClient, AssetValidationClient>(cl
     // The trailing slash matters: without it the last path segment of a base
     // address would be replaced by the relative path rather than extended.
     client.BaseAddress = new Uri(customerServiceBaseUrl.TrimEnd('/') + "/");
+    client.DefaultRequestHeaders.Add("X-ASSMS-Service-Key", customerServiceInternalKey);
 });
 
 // Singleton: building a producer opens sockets and starts a background thread,
@@ -68,6 +73,17 @@ builder.Services.AddSingleton<IEventPublisher>(serviceProvider =>
     new KafkaEventPublisher(
         kafkaBootstrapServers,
         serviceProvider.GetRequiredService<ILogger<KafkaEventPublisher>>()));
+
+// This service both produces and consumes: it publishes JobCreated when a job is
+// raised, and reads back the JobAssigned that Dispatch decides in response.
+//
+// A hosted service is a singleton, which is why it takes the scope factory and
+// not the repository - see the note in JobAssignedConsumer.
+builder.Services.AddHostedService(serviceProvider =>
+    new JobAssignedConsumer(
+        kafkaBootstrapServers,
+        serviceProvider.GetRequiredService<IServiceScopeFactory>(),
+        serviceProvider.GetRequiredService<ILogger<JobAssignedConsumer>>()));
 
 builder.Services.AddControllers()
     .AddJsonOptions(options =>
@@ -89,6 +105,18 @@ builder.Services.AddSwaggerGen(options =>
 });
 
 var app = builder.Build();
+
+// Applied as its own deployment step rather than on startup, matching Dispatch
+// and Reporting: the CD workflow runs the image once with this flag, waits for it
+// to exit, and only then replaces the running container. Migrating on startup
+// would let several instances race the same ALTER, and would leave a consumer
+// running against a half-migrated schema if one failed.
+if (args.Contains("--apply-migrations", StringComparer.Ordinal))
+{
+    using var migrationScope = app.Services.CreateScope();
+    await migrationScope.ServiceProvider.GetRequiredService<JobMigrationRunner>().ApplyAsync();
+    return;
+}
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())

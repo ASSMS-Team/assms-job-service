@@ -10,6 +10,10 @@ namespace JobService.Controllers;
 [Produces("application/json")]
 public class JobsController : ControllerBase
 {
+    private static readonly HashSet<string> SupportedStatuses = new(StringComparer.Ordinal)
+    {
+        "CREATED", "ASSIGNED"
+    };
     // Qualified: the class shares its name with the root namespace, so the bare
     // name would bind to the namespace and not compile.
     private readonly Services.JobService _jobService;
@@ -113,6 +117,36 @@ public class JobsController : ControllerBase
     }
 
     /// <summary>
+    /// Lists Job Service-owned jobs. The optional status and assignedTechnicianId
+    /// filters are combined with AND semantics. Assignment context is the local
+    /// JobAssigned projection in jobdb; this endpoint never reads dispatchdb.
+    /// </summary>
+    [HttpGet]
+    [ProducesResponseType(typeof(IReadOnlyList<JobResponse>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> List([FromQuery] string? status, [FromQuery] string? assignedTechnicianId)
+    {
+        var normalizedStatus = string.IsNullOrWhiteSpace(status) ? null : status.Trim().ToUpperInvariant();
+        if (normalizedStatus is not null && !SupportedStatuses.Contains(normalizedStatus))
+        {
+            return BadRequest(InvalidFilter("status", "Status must be CREATED or ASSIGNED."));
+        }
+
+        string? normalizedTechnicianId = null;
+        if (!string.IsNullOrWhiteSpace(assignedTechnicianId))
+        {
+            if (!Guid.TryParse(assignedTechnicianId, out var technicianId))
+            {
+                return BadRequest(InvalidFilter("assignedTechnicianId", "AssignedTechnicianId must be a valid GUID."));
+            }
+
+            normalizedTechnicianId = technicianId.ToString();
+        }
+
+        return Ok(await _jobService.ListAsync(normalizedStatus, normalizedTechnicianId));
+    }
+
+    /// <summary>
     /// Returns a single job by id.
     /// </summary>
     /// <param name="id">The server-generated job id (a GUID string) returned when the job was created.</param>
@@ -157,4 +191,11 @@ public class JobsController : ControllerBase
 
         return Ok(job);
     }
+
+    private static ValidationProblemDetails InvalidFilter(string field, string message) =>
+        new(new Dictionary<string, string[]> { [field] = new[] { message } })
+        {
+            Status = StatusCodes.Status400BadRequest,
+            Title = "One or more query filters are invalid."
+        };
 }
