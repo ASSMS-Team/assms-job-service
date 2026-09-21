@@ -1,12 +1,18 @@
 using System.Reflection;
 using System.Net;
+using System.IdentityModel.Tokens.Jwt;
+using System.Text;
 using System.Text.Json;
 
 using JobService.Messaging.Consumers;
 using JobService.Messaging.Producers;
 using JobService.Repositories;
+using JobService.Security;
 using JobService.Services;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.IdentityModel.Tokens;
+using Microsoft.OpenApi.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -37,6 +43,36 @@ builder.Services.AddCors(options =>
         .AllowAnyHeader()
         .AllowAnyMethod());
 });
+
+// Job list and detail data is staff-only. Use the same issuer, audience and
+// signing key as Customer & Asset and Dispatch so one staff login is valid
+// across the services without forwarding a password or making a cross-service
+// authorization call.
+builder.Services.AddOptions<JwtOptions>()
+    .Bind(builder.Configuration.GetSection(JwtOptions.SectionName))
+    .Validate(options => Encoding.UTF8.GetByteCount(options.SigningKey) >= 32,
+        "Authentication:Jwt:SigningKey must contain at least 32 UTF-8 bytes.")
+    .ValidateOnStart();
+var jwt = builder.Configuration.GetSection(JwtOptions.SectionName).Get<JwtOptions>() ?? new JwtOptions();
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.MapInboundClaims = false;
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidIssuer = jwt.Issuer,
+            ValidateAudience = true,
+            ValidAudience = jwt.Audience,
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwt.SigningKey)),
+            ValidateLifetime = true,
+            ClockSkew = TimeSpan.FromSeconds(30),
+            NameClaimType = JwtRegisteredClaimNames.UniqueName,
+            RoleClaimType = "role",
+        };
+    });
+builder.Services.AddAuthorization();
 
 // Nginx reaches the loopback-published container through Docker's bridge
 // gateway. Trust only that proxy address when consuming client and scheme
@@ -102,6 +138,16 @@ builder.Services.AddSwaggerGen(options =>
     // the descriptions; the file sits next to the DLL in the output folder.
     var xmlFilename = $"{Assembly.GetExecutingAssembly().GetName().Name}.xml";
     options.IncludeXmlComments(Path.Combine(AppContext.BaseDirectory, xmlFilename));
+    options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        Name = "Authorization",
+        Type = SecuritySchemeType.Http,
+        Scheme = "bearer",
+        BearerFormat = "JWT",
+        In = ParameterLocation.Header,
+        Description = "Enter the JWT returned by POST /api/auth/login.",
+    });
+    options.OperationFilter<AuthorizeOperationFilter>();
 });
 
 var app = builder.Build();
@@ -131,6 +177,7 @@ app.UseHttpsRedirection();
 
 app.UseCors(FrontendCorsPolicy);
 
+app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
