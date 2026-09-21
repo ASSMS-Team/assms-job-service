@@ -1,6 +1,8 @@
 using JobService.DTOs;
+using JobService.Security;
 using JobService.Services;
 
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace JobService.Controllers;
@@ -37,6 +39,7 @@ public class JobsController : ControllerBase
     /// <response code="409">The asset and customer are a pairing no job can be raised against: no such asset, the asset belongs to a different customer, the asset is inactive, or the customer is inactive. The four are told apart by the key and message in the body.</response>
     /// <response code="503">The Customer &amp; Asset Service could not be reached, so the asset could not be validated. No job was created and the request can be retried unchanged.</response>
     [HttpPost]
+    [Authorize(Roles = StaffRoles.JobCreators)]
     [ProducesResponseType(typeof(JobResponse), StatusCodes.Status201Created)]
     [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status409Conflict)]
@@ -122,6 +125,7 @@ public class JobsController : ControllerBase
     /// JobAssigned projection in jobdb; this endpoint never reads dispatchdb.
     /// </summary>
     [HttpGet]
+    [Authorize(Roles = StaffRoles.JobViewers)]
     [ProducesResponseType(typeof(IReadOnlyList<JobResponse>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> List([FromQuery] string? status, [FromQuery] string? assignedTechnicianId)
@@ -153,6 +157,7 @@ public class JobsController : ControllerBase
     /// <response code="200">The job with this id.</response>
     /// <response code="404">No job exists with this id.</response>
     [HttpGet("{id}")]
+    [Authorize(Roles = StaffRoles.JobViewers)]
     [ProducesResponseType(typeof(JobResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetById(string id)
@@ -178,6 +183,7 @@ public class JobsController : ControllerBase
     // different formats and guessing which one was supplied would make a
     // mistyped id look like a missing reference.
     [HttpGet("reference/{jobReference}")]
+    [Authorize(Roles = StaffRoles.JobViewers)]
     [ProducesResponseType(typeof(JobResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetByReference(string jobReference)
