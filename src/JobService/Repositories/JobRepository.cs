@@ -12,7 +12,8 @@ public class JobRepository : IJobRepository
             SELECT id, job_reference, customer_id, asset_id, service_category,
                    problem_description, priority, region, scheduled_date,
                    created_by, status, assignment_id, assigned_technician_id,
-                   assigned_technician_reference, assigned_at, created_at, updated_at
+                   assigned_technician_reference, assigned_at, started_at,
+                   created_at, updated_at
             FROM jobs";
 
     private readonly IDbConnectionFactory _connectionFactory;
@@ -116,6 +117,37 @@ public class JobRepository : IJobRepository
         return rowsAffected > 0;
     }
 
+    // Updates status to IN_PROGRESS and records started_at in a single
+    // statement. The WHERE clause is the whole guard:
+    //   status = 'ASSIGNED'         — rejects any invalid lifecycle transition
+    //   assigned_technician_id = @technicianId — rejects a non-assignee caller
+    //   id = @jobId                  — scopes to the requested job
+    //
+    // updated_at is not named: the ON UPDATE clause on the column moves it
+    // automatically whenever any other column actually changes.
+    public async Task<bool> StartJobAsync(string jobId, string technicianId, DateTime startedAt)
+    {
+        await using var connection = _connectionFactory.CreateConnection();
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            UPDATE jobs
+            SET    status     = 'IN_PROGRESS',
+                   started_at = @startedAt
+            WHERE  id                     = @jobId
+              AND  status                 = 'ASSIGNED'
+              AND  assigned_technician_id = @technicianId;";
+
+        command.Parameters.AddWithValue("@jobId", jobId);
+        command.Parameters.AddWithValue("@technicianId", technicianId);
+        command.Parameters.AddWithValue("@startedAt", startedAt);
+
+        var rowsAffected = await command.ExecuteNonQueryAsync();
+
+        return rowsAffected > 0;
+    }
+
     public async Task<Job?> GetByIdAsync(string id)
     {
         await using var connection = _connectionFactory.CreateConnection();
@@ -207,6 +239,7 @@ public class JobRepository : IJobRepository
         var assignedTechnicianIdOrdinal = reader.GetOrdinal("assigned_technician_id");
         var assignedTechnicianReferenceOrdinal = reader.GetOrdinal("assigned_technician_reference");
         var assignedAtOrdinal = reader.GetOrdinal("assigned_at");
+        var startedAtOrdinal = reader.GetOrdinal("started_at");
         var createdAtOrdinal = reader.GetOrdinal("created_at");
         var updatedAtOrdinal = reader.GetOrdinal("updated_at");
 
@@ -234,6 +267,7 @@ public class JobRepository : IJobRepository
             AssignedTechnicianId = reader.IsDBNull(assignedTechnicianIdOrdinal) ? null : reader.GetValue(assignedTechnicianIdOrdinal).ToString(),
             AssignedTechnicianReference = reader.IsDBNull(assignedTechnicianReferenceOrdinal) ? null : reader.GetString(assignedTechnicianReferenceOrdinal),
             AssignedAt = reader.IsDBNull(assignedAtOrdinal) ? null : reader.GetDateTime(assignedAtOrdinal),
+            StartedAt = reader.IsDBNull(startedAtOrdinal) ? null : reader.GetDateTime(startedAtOrdinal),
             CreatedAt = reader.GetDateTime(createdAtOrdinal),
             UpdatedAt = reader.GetDateTime(updatedAtOrdinal)
         };

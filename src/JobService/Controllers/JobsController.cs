@@ -14,7 +14,7 @@ public class JobsController : ControllerBase
 {
     private static readonly HashSet<string> SupportedStatuses = new(StringComparer.Ordinal)
     {
-        "CREATED", "ASSIGNED"
+        "CREATED", "ASSIGNED", "IN_PROGRESS"
     };
     // Qualified: the class shares its name with the root namespace, so the bare
     // name would bind to the namespace and not compile.
@@ -196,6 +196,67 @@ public class JobsController : ControllerBase
         }
 
         return Ok(job);
+    }
+
+    /// <summary>
+    /// Starts an assigned job on behalf of its active technician. The job must
+    /// be in status ASSIGNED and the caller must be the active assignee.
+    /// On success the job moves to IN_PROGRESS and a JobStatusChanged event is
+    /// published to the job-status-changed Kafka topic.
+    /// </summary>
+    /// <param name="id">The server-generated job id (a GUID string).</param>
+    /// <param name="request">The technician id asserting they are starting the job.</param>
+    /// <response code="200">The job has been moved to IN_PROGRESS. The response body is the updated job.</response>
+    /// <response code="400">TechnicianId was missing or not a valid GUID.</response>
+    /// <response code="403">The caller is not the active assignee of this job.</response>
+    /// <response code="404">No job exists with this id.</response>
+    /// <response code="409">The job is not in a state that allows the start transition (it is not ASSIGNED).</response>
+    [HttpPost("{id}/start")]
+    [ProducesResponseType(typeof(JobResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> Start(string id, [FromBody] StartJobRequest request)
+    {
+        if (!Guid.TryParse(request.TechnicianId, out _))
+        {
+            return BadRequest(new ValidationProblemDetails(
+                new Dictionary<string, string[]>
+                {
+                    ["technicianId"] = new[] { "TechnicianId must be a valid GUID." }
+                })
+            {
+                Status = StatusCodes.Status400BadRequest
+            });
+        }
+
+        var result = await _jobService.StartJobAsync(id, request.TechnicianId);
+
+        if (result.Error == ServiceError.JobNotFound)
+            return NotFound();
+
+        if (result.Error == ServiceError.NotTheAssignee)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new ProblemDetails
+            {
+                Title = "Forbidden.",
+                Detail = "The supplied technician id is not the active assignee of this job.",
+                Status = StatusCodes.Status403Forbidden
+            });
+        }
+
+        if (result.Error == ServiceError.NotAssigned)
+        {
+            return Conflict(new ProblemDetails
+            {
+                Title = "Invalid lifecycle transition.",
+                Detail = "Only a job in status ASSIGNED can be started. The job is currently in a different status.",
+                Status = StatusCodes.Status409Conflict
+            });
+        }
+
+        return Ok(result.Value);
     }
 
     private static ValidationProblemDetails InvalidFilter(string field, string message) =>

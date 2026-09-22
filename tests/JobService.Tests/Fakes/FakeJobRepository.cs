@@ -126,9 +126,30 @@ public class FakeJobRepository : IJobRepository
 
         return Task.FromResult(ApplyAssignmentResult);
     }
+
+    // StartJobAsync
+    public string? StartJobAsyncCalledWithJobId;
+    public string? StartJobAsyncCalledWithTechnicianId;
+    public DateTime? StartJobAsyncCalledWithStartedAt;
+    public int StartJobAsyncCallCount;
+
+    // True by default: the guarded UPDATE matched and the row changed.
+    // Set to false to simulate the guard firing (wrong status / wrong technician
+    // / no such job), which is the branch that triggers the read-back.
+    public bool StartJobAsyncResult = true;
+
+    public Task<bool> StartJobAsync(string jobId, string technicianId, DateTime startedAt)
+    {
+        StartJobAsyncCalledWithJobId = jobId;
+        StartJobAsyncCalledWithTechnicianId = technicianId;
+        StartJobAsyncCalledWithStartedAt = startedAt;
+        StartJobAsyncCallCount++;
+
+        return Task.FromResult(StartJobAsyncResult);
+    }
 }
 
-// One recorded ApplyAssignmentAsync call. A record rather than the Job model:
+// One recorded AppliedAssignment call. A record rather than the Job model:
 // these are the arguments the consumer mapped out of an event, and asserting on
 // them is how the mapping is pinned.
 public record AppliedAssignment(
