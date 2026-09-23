@@ -46,6 +46,9 @@ public class JobResponse
 
     /// <summary>Database timestamp for when the job was last modified.</summary>
     public DateTime UpdatedAt { get; set; }
+
+    /// <summary>When the active assignee moved the job to IN_PROGRESS, or null until that transition happens.</summary>
+    public DateTime? StartedAt { get; set; }
 }
 
 /// <summary>Assignment facts published by Dispatch and stored locally in jobdb.</summary>

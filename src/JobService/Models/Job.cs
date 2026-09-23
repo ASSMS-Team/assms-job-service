@@ -46,6 +46,10 @@ public class Job
 
     public DateTime? AssignedAt { get; set; }
 
+    // Written when the active assignee moves the job to IN_PROGRESS (US-10A).
+    // Null until that transition happens.
+    public DateTime? StartedAt { get; set; }
+
     public DateTime CreatedAt { get; set; }
 
     public DateTime UpdatedAt { get; set; }

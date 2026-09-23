@@ -27,6 +27,10 @@ public class JobService
 
     private const string CreatedStatus = "CREATED";
 
+    private const string AssignedStatus = "ASSIGNED";
+
+    private const string InProgressStatus = "IN_PROGRESS";
+
     private readonly IJobRepository _repository;
     // customerdb belongs to another service, so whether the asset and customer
     // are usable is a question that can only be asked over HTTP.
@@ -109,6 +113,42 @@ public class JobService
         return jobs.Select(MapToResponse).ToList();
     }
 
+    // Transitions a job from ASSIGNED to IN_PROGRESS on behalf of the active
+    // assignee. The repository's guarded UPDATE is the single source of truth
+    // for every business rule: if it returns false, the row is read back to
+    // determine which rule fired.
+    public async Task<Result<JobResponse>> StartJobAsync(string jobId, string callerTechnicianId)
+    {
+        var startedAt = DateTime.UtcNow;
+
+        var changed = await _repository.StartJobAsync(jobId, callerTechnicianId, startedAt);
+
+        if (!changed)
+        {
+            // Read once to distinguish the three reasons the guard can fire.
+            var existing = await _repository.GetByIdAsync(jobId);
+
+            if (existing is null)
+                return Result<JobResponse>.Failure(ServiceError.JobNotFound);
+
+            if (existing.Status != AssignedStatus)
+                return Result<JobResponse>.Failure(ServiceError.NotAssigned);
+
+            // The job is ASSIGNED, so the only remaining reason the UPDATE
+            // matched nothing is that the caller is not the active assignee.
+            return Result<JobResponse>.Failure(ServiceError.NotTheAssignee);
+        }
+
+        // Read the updated row back so the response carries the database
+        // timestamps rather than the values we computed in memory.
+        var updated = await _repository.GetByIdAsync(jobId) ?? throw new InvalidOperationException(
+            $"Job {jobId} was just updated to IN_PROGRESS but could not be read back.");
+
+        await PublishJobStatusChangedAsync(updated, oldStatus: AssignedStatus);
+
+        return Result<JobResponse>.Success(MapToResponse(updated));
+    }
+
     // Generates a reference and inserts, treating a duplicate-key failure as a
     // reason to draw a new reference rather than as an error. The unique index
     // is what detects the collision - there is no pre-check, because two
@@ -183,6 +223,46 @@ public class JobService
         }
     }
 
+    // The same fire-and-forget pattern as PublishJobCreatedAsync: the status
+    // transition is committed before this runs, so a broker failure must not
+    // roll it back or surface as an error to the caller.
+    private async Task PublishJobStatusChangedAsync(Job job, string oldStatus)
+    {
+        try
+        {
+            var payload = new JobStatusChangedPayload
+            {
+                JobId = job.Id,
+                JobReference = job.JobReference,
+                AssignmentId = job.AssignmentId,
+                TechnicianId = job.AssignedTechnicianId,
+                TechnicianReference = job.AssignedTechnicianReference,
+                OldStatus = oldStatus,
+                NewStatus = job.Status,
+                // Use the stored started_at rather than a fresh UtcNow so the
+                // event's business time matches what is in the database.
+                OccurredAt = job.StartedAt ?? DateTime.UtcNow
+            };
+
+            await _eventPublisher.PublishAsync(
+                JobStatusChangedPayload.Topic,
+                JobStatusChangedPayload.EventType,
+                JobStatusChangedPayload.EventVersion,
+                job.Id,
+                payload);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Job {JobId} ({JobReference}) was transitioned to {NewStatus} but the {EventType} event could not be published.",
+                job.Id,
+                job.JobReference,
+                job.Status,
+                JobStatusChangedPayload.EventType);
+        }
+    }
+
     private static ServiceError MapValidationOutcome(AssetValidationOutcome outcome) => outcome switch
     {
         AssetValidationOutcome.AssetNotFound => ServiceError.AssetNotFound,
@@ -217,6 +297,7 @@ public class JobService
                 TechnicianReference = job.AssignedTechnicianReference,
                 AssignedAt = job.AssignedAt.Value
             },
+        StartedAt = job.StartedAt,
         CreatedAt = job.CreatedAt,
         UpdatedAt = job.UpdatedAt
     };

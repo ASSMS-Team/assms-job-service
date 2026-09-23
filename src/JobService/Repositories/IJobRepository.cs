@@ -38,4 +38,14 @@ public interface IJobRepository
         string technicianReference,
         string status,
         DateTime assignedAt);
+
+    // Transitions the job from ASSIGNED → IN_PROGRESS, recording the start
+    // timestamp. The update is guarded: it matches only when the job exists,
+    // is currently ASSIGNED, and the supplied technicianId is the active assignee.
+    //
+    // Returns true when the row was changed, false when the guard prevented it.
+    // False is not retried; the service reads the job to distinguish the three
+    // possible reasons (not found, wrong status, wrong technician) and returns
+    // the appropriate error to the controller.
+    Task<bool> StartJobAsync(string jobId, string technicianId, DateTime startedAt);
 }

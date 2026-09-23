@@ -405,4 +405,242 @@ public class JobServiceTests
 
         Assert.Null(job.Assignment);
     }
+
+    // -----------------------------------------------------------------------
+    // StartJobAsync (US-10A)
+    // -----------------------------------------------------------------------
+
+    private const string AssignedJobId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    private const string ActiveTechnicianId = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+    private const string OtherTechnicianId = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+    private const string AssignmentId = "dddddddd-dddd-dddd-dddd-dddddddddddd";
+
+    // The fully populated ASSIGNED job that represents the happy-path state
+    // before the start call.
+    private static Job AssignedJob() => new()
+    {
+        Id = AssignedJobId,
+        JobReference = "JOB-START1",
+        CustomerId = CustomerId,
+        AssetId = AssetId,
+        Status = "ASSIGNED",
+        AssignmentId = AssignmentId,
+        AssignedTechnicianId = ActiveTechnicianId,
+        AssignedTechnicianReference = "TEC-099",
+        AssignedAt = new DateTime(2026, 9, 20, 8, 0, 0, DateTimeKind.Utc),
+        CreatedAt = new DateTime(2026, 9, 19, 7, 0, 0, DateTimeKind.Utc),
+        UpdatedAt = new DateTime(2026, 9, 20, 8, 0, 0, DateTimeKind.Utc)
+    };
+
+    // The row as it reads back after the update: status moved, started_at set.
+    private static Job InProgressJob(DateTime startedAt) => new()
+    {
+        Id = AssignedJobId,
+        JobReference = "JOB-START1",
+        CustomerId = CustomerId,
+        AssetId = AssetId,
+        Status = "IN_PROGRESS",
+        AssignmentId = AssignmentId,
+        AssignedTechnicianId = ActiveTechnicianId,
+        AssignedTechnicianReference = "TEC-099",
+        AssignedAt = new DateTime(2026, 9, 20, 8, 0, 0, DateTimeKind.Utc),
+        StartedAt = startedAt,
+        CreatedAt = new DateTime(2026, 9, 19, 7, 0, 0, DateTimeKind.Utc),
+        UpdatedAt = startedAt
+    };
+
+    // AC1: The active assignee can move an ASSIGNED job to IN_PROGRESS.
+    [Fact]
+    public async Task StartJobAsync_ActiveAssignee_TransitionsJobToInProgress()
+    {
+        // Arrange - repository signals the UPDATE matched (row changed).
+        var startedAt = new DateTime(2026, 9, 22, 6, 0, 0, DateTimeKind.Utc);
+        var repository = new FakeJobRepository
+        {
+            StartJobAsyncResult = true,
+            // Read-back returns the updated row.
+            JobToReturn = InProgressJob(startedAt)
+        };
+        var service = BuildService(repository, new FakeAssetValidationClient(), new FakeEventPublisher());
+
+        // Act
+        var result = await service.StartJobAsync(AssignedJobId, ActiveTechnicianId);
+
+        // Assert
+        Assert.True(result.IsSuccess);
+        Assert.Equal(ServiceError.None, result.Error);
+        Assert.Equal("IN_PROGRESS", result.Value!.Status);
+
+        // The repository received the right arguments.
+        Assert.Equal(AssignedJobId, repository.StartJobAsyncCalledWithJobId);
+        Assert.Equal(ActiveTechnicianId, repository.StartJobAsyncCalledWithTechnicianId);
+        Assert.NotNull(repository.StartJobAsyncCalledWithStartedAt);
+    }
+
+    // AC2: The start timestamp and status-history record are persisted.
+    // (The timestamp is what this service can observe; the status-history record
+    // is verified by the repository returning it on read-back.)
+    [Fact]
+    public async Task StartJobAsync_ReadsTheRowBack_SoStartedAtIsReturnedFromTheDatabase()
+    {
+        // Arrange - the read-back carries a specific started_at from the DB.
+        var dbStartedAt = new DateTime(2026, 9, 22, 6, 0, 0, DateTimeKind.Utc);
+        var repository = new FakeJobRepository
+        {
+            StartJobAsyncResult = true,
+            JobToReturn = InProgressJob(dbStartedAt)
+        };
+        var service = BuildService(repository, new FakeAssetValidationClient(), new FakeEventPublisher());
+
+        // Act
+        var result = await service.StartJobAsync(AssignedJobId, ActiveTechnicianId);
+
+        // Assert - started_at comes from the read-back, not from an in-memory value.
+        Assert.Equal(dbStartedAt, result.Value!.StartedAt);
+        // The read-back is by the job id the service was given.
+        Assert.Equal(AssignedJobId, repository.GetByIdId);
+    }
+
+    // AC3: A Technician who is not the active assignee is forbidden.
+    [Fact]
+    public async Task StartJobAsync_NonAssigneeCaller_ReturnsNotTheAssignee()
+    {
+        // Arrange - the guarded UPDATE returns false because the WHERE clause
+        // filtered out the non-matching assigned_technician_id.
+        var repository = new FakeJobRepository
+        {
+            StartJobAsyncResult = false,
+            // The job exists and is ASSIGNED, so the only reason the guard fired
+            // is the technician mismatch.
+            JobToReturn = AssignedJob()
+        };
+        var service = BuildService(repository, new FakeAssetValidationClient(), new FakeEventPublisher());
+
+        // Act
+        var result = await service.StartJobAsync(AssignedJobId, OtherTechnicianId);
+
+        // Assert
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ServiceError.NotTheAssignee, result.Error);
+        Assert.Null(result.Value);
+    }
+
+    // AC4a: A job that has never been assigned (CREATED status) is rejected.
+    [Fact]
+    public async Task StartJobAsync_JobNotAssigned_WhenCreated_ReturnsNotAssigned()
+    {
+        var repository = new FakeJobRepository
+        {
+            StartJobAsyncResult = false,
+            JobToReturn = new Job { Id = AssignedJobId, Status = "CREATED" }
+        };
+        var service = BuildService(repository, new FakeAssetValidationClient(), new FakeEventPublisher());
+
+        var result = await service.StartJobAsync(AssignedJobId, ActiveTechnicianId);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ServiceError.NotAssigned, result.Error);
+    }
+
+    // AC4b: An already-started job (IN_PROGRESS) is rejected.
+    [Fact]
+    public async Task StartJobAsync_JobNotAssigned_WhenInProgress_ReturnsNotAssigned()
+    {
+        var repository = new FakeJobRepository
+        {
+            StartJobAsyncResult = false,
+            JobToReturn = new Job { Id = AssignedJobId, Status = "IN_PROGRESS" }
+        };
+        var service = BuildService(repository, new FakeAssetValidationClient(), new FakeEventPublisher());
+
+        var result = await service.StartJobAsync(AssignedJobId, ActiveTechnicianId);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ServiceError.NotAssigned, result.Error);
+    }
+
+    // AC4c: A job that does not exist is reported as not found.
+    [Fact]
+    public async Task StartJobAsync_UnknownJob_ReturnsJobNotFound()
+    {
+        // Arrange - guard fires and the read-back finds nothing (null).
+        var repository = new FakeJobRepository
+        {
+            StartJobAsyncResult = false,
+            JobToReturn = null   // no such row
+        };
+        var service = BuildService(repository, new FakeAssetValidationClient(), new FakeEventPublisher());
+
+        var result = await service.StartJobAsync("99999999-9999-9999-9999-999999999999", ActiveTechnicianId);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ServiceError.JobNotFound, result.Error);
+    }
+
+    // AC5: A successful change publishes one valid JobStatusChanged event.
+    [Fact]
+    public async Task StartJobAsync_OnSuccess_PublishesJobStatusChangedEvent()
+    {
+        // Arrange
+        var startedAt = new DateTime(2026, 9, 22, 6, 0, 0, DateTimeKind.Utc);
+        var updatedJob = InProgressJob(startedAt);
+        var repository = new FakeJobRepository
+        {
+            StartJobAsyncResult = true,
+            JobToReturn = updatedJob
+        };
+        var publisher = new FakeEventPublisher();
+        var service = BuildService(repository, new FakeAssetValidationClient(), publisher);
+
+        // Act
+        await service.StartJobAsync(AssignedJobId, ActiveTechnicianId);
+
+        // Assert - exactly one event on the correct topic, keyed by job id.
+        Assert.Equal(1, publisher.PublishAsyncCallCount);
+        Assert.Equal("job-status-changed", publisher.PublishedTopic);
+        Assert.Equal("JobStatusChanged", publisher.PublishedEventType);
+        Assert.Equal(1, publisher.PublishedEventVersion);
+        Assert.Equal(AssignedJobId, publisher.PublishedKey);
+
+        var payload = Assert.IsType<JobStatusChangedPayload>(publisher.PublishedPayload);
+        Assert.Equal(AssignedJobId, payload.JobId);
+        Assert.Equal("JOB-START1", payload.JobReference);
+        Assert.Equal(AssignmentId, payload.AssignmentId);
+        Assert.Equal(ActiveTechnicianId, payload.TechnicianId);
+        Assert.Equal("TEC-099", payload.TechnicianReference);
+        Assert.Equal("ASSIGNED", payload.OldStatus);
+        Assert.Equal("IN_PROGRESS", payload.NewStatus);
+        Assert.Equal(startedAt, payload.OccurredAt);
+    }
+
+    // AC5 (negative): A broker failure must not fail the request. The job is
+    // already committed when the publish runs, so a failed publish is logged
+    // and swallowed, matching the same guarantee on job creation.
+    [Fact]
+    public async Task StartJobAsync_WhenPublishingFails_StillReturnsTheUpdatedJob()
+    {
+        // Arrange
+        var startedAt = new DateTime(2026, 9, 22, 6, 0, 0, DateTimeKind.Utc);
+        var repository = new FakeJobRepository
+        {
+            StartJobAsyncResult = true,
+            JobToReturn = InProgressJob(startedAt)
+        };
+        var publisher = new FakeEventPublisher
+        {
+            ExceptionToThrow = new InvalidOperationException("Broker unavailable.")
+        };
+        var service = BuildService(repository, new FakeAssetValidationClient(), publisher);
+
+        // Act
+        var result = await service.StartJobAsync(AssignedJobId, ActiveTechnicianId);
+
+        // Assert - the status transition succeeded.
+        Assert.True(result.IsSuccess);
+        Assert.Equal("IN_PROGRESS", result.Value!.Status);
+        Assert.Equal(startedAt, result.Value.StartedAt);
+
+        // Publishing was attempted, not skipped.
+        Assert.Equal(1, publisher.PublishAsyncCallCount);
+    }
 }
