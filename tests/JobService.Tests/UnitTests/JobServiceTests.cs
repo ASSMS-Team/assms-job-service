@@ -643,4 +643,286 @@ public class JobServiceTests
         // Publishing was attempted, not skipped.
         Assert.Equal(1, publisher.PublishAsyncCallCount);
     }
+<<<<<<< Updated upstream
+=======
+
+    // =========================================================================
+    // US-11A: Add Service Work Record Tests
+    // =========================================================================
+
+    // AC1 & AC2: The active assignee can add a valid work record to an active
+    // (IN_PROGRESS) job. The record stores the job, technician, content and timestamp.
+    [Fact]
+    public async Task AddWorkRecordAsync_ByActiveAssigneeOnInProgressJob_SucceedsAndPersists()
+    {
+        // Arrange
+        var repository = new FakeJobRepository
+        {
+            JobToReturn = InProgressJob(DateTime.UtcNow)
+        };
+        var service = BuildService(repository);
+        const string content = "Replaced capacitor and verified cooling cycle.";
+
+        // Act
+        var result = await service.AddWorkRecordAsync(AssignedJobId, ActiveTechnicianId, content);
+
+        // Assert
+        Assert.True(result.IsSuccess);
+        Assert.NotNull(result.Value);
+        Assert.Equal(AssignedJobId, result.Value.JobId);
+        Assert.Equal("JOB-START1", result.Value.JobReference);
+        Assert.Equal(ActiveTechnicianId, result.Value.TechnicianId);
+        Assert.Equal("TEC-099", result.Value.TechnicianReference);
+        Assert.Equal(content, result.Value.Content);
+        Assert.True(result.Value.RecordedAt > DateTime.MinValue);
+
+        // Repository was called and stored the record
+        Assert.Equal(1, repository.AddWorkRecordCallCount);
+        Assert.NotNull(repository.LastAddedWorkRecord);
+        Assert.Equal(content, repository.LastAddedWorkRecord.Content);
+        Assert.Equal(ActiveTechnicianId, repository.LastAddedWorkRecord.TechnicianId);
+    }
+
+    // AC3: Missing required content is rejected.
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(null)]
+    public async Task AddWorkRecordAsync_WithMissingOrWhitespaceContent_ReturnsMissingContent(string? content)
+    {
+        // Arrange
+        var repository = new FakeJobRepository
+        {
+            JobToReturn = InProgressJob(DateTime.UtcNow)
+        };
+        var service = BuildService(repository);
+
+        // Act
+        var result = await service.AddWorkRecordAsync(AssignedJobId, ActiveTechnicianId, content!);
+
+        // Assert
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ServiceError.MissingContent, result.Error);
+        Assert.Equal(0, repository.AddWorkRecordCallCount);
+    }
+
+    // AC4: A technician who is not the active assignee cannot add records.
+    [Fact]
+    public async Task AddWorkRecordAsync_ByNonAssignee_ReturnsNotTheAssignee()
+    {
+        // Arrange
+        var repository = new FakeJobRepository
+        {
+            JobToReturn = InProgressJob(DateTime.UtcNow)
+        };
+        var service = BuildService(repository);
+        const string otherTechnicianId = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
+
+        // Act
+        var result = await service.AddWorkRecordAsync(AssignedJobId, otherTechnicianId, "Checked unit.");
+
+        // Assert
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ServiceError.NotTheAssignee, result.Error);
+        Assert.Equal(0, repository.AddWorkRecordCallCount);
+    }
+
+    // AC1: Invalid lifecycle states are rejected without adding records.
+    [Theory]
+    [InlineData("CREATED")]
+    [InlineData("ASSIGNED")]
+    [InlineData("COMPLETED")]
+    [InlineData("CANCELLED")]
+    public async Task AddWorkRecordAsync_WhenJobIsNotInProgress_ReturnsJobNotInProgress(string invalidStatus)
+    {
+        // Arrange
+        var job = AssignedJob();
+        job.Status = invalidStatus;
+        var repository = new FakeJobRepository
+        {
+            JobToReturn = job
+        };
+        var service = BuildService(repository);
+
+        // Act
+        var result = await service.AddWorkRecordAsync(AssignedJobId, ActiveTechnicianId, "Checked unit.");
+
+        // Assert
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ServiceError.JobNotInProgress, result.Error);
+        Assert.Equal(0, repository.AddWorkRecordCallCount);
+    }
+
+    [Fact]
+    public async Task AddWorkRecordAsync_WhenJobDoesNotExist_ReturnsJobNotFound()
+    {
+        // Arrange
+        var repository = new FakeJobRepository
+        {
+            JobToReturn = null
+        };
+        var service = BuildService(repository);
+
+        // Act
+        var result = await service.AddWorkRecordAsync("missing-job-id", ActiveTechnicianId, "Some work.");
+
+        // Assert
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ServiceError.JobNotFound, result.Error);
+        Assert.Equal(0, repository.AddWorkRecordCallCount);
+    }
+
+    [Fact]
+    public async Task GetWorkRecordsAsync_ReturnsStoredRecordsForJob()
+    {
+        // Arrange
+        var repository = new FakeJobRepository
+        {
+            JobToReturn = InProgressJob(DateTime.UtcNow)
+        };
+        repository.StoredWorkRecords.Add(new ServiceWorkRecord
+        {
+            Id = Guid.NewGuid().ToString(),
+            JobId = AssignedJobId,
+            JobReference = "JOB-START1",
+            TechnicianId = ActiveTechnicianId,
+            TechnicianReference = "TEC-099",
+            Content = "First record",
+            RecordedAt = DateTime.UtcNow.AddMinutes(-10),
+            CreatedAt = DateTime.UtcNow.AddMinutes(-10)
+        });
+        repository.StoredWorkRecords.Add(new ServiceWorkRecord
+        {
+            Id = Guid.NewGuid().ToString(),
+            JobId = AssignedJobId,
+            JobReference = "JOB-START1",
+            TechnicianId = ActiveTechnicianId,
+            TechnicianReference = "TEC-099",
+            Content = "Second record",
+            RecordedAt = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow
+        });
+        var service = BuildService(repository);
+
+        // Act
+        var records = await service.GetWorkRecordsAsync(AssignedJobId);
+
+        // Assert
+        Assert.NotNull(records);
+        Assert.Equal(2, records.Count);
+        Assert.Equal("First record", records[0].Content);
+        Assert.Equal("Second record", records[1].Content);
+    }
+
+    [Fact]
+    public async Task GetWorkRecordsAsync_WhenJobDoesNotExist_ReturnsNull()
+    {
+        // Arrange
+        var repository = new FakeJobRepository
+        {
+            JobToReturn = null
+        };
+        var service = BuildService(repository);
+
+        // Act
+        var records = await service.GetWorkRecordsAsync("non-existent-job");
+
+        // Assert
+        Assert.Null(records);
+    }
+
+    [Fact]
+    public async Task UpdateWorkRecordAsync_ByActiveAssigneeOnInProgressJob_SucceedsAndPersists()
+    {
+        // Arrange
+        var repository = new FakeJobRepository
+        {
+            JobToReturn = new Job
+            {
+                Id = AssignedJobId,
+                Status = "IN_PROGRESS",
+                AssignedTechnicianId = ActiveTechnicianId
+            }
+        };
+
+        var recordId = Guid.NewGuid().ToString();
+        repository.StoredWorkRecords.Add(new ServiceWorkRecord
+        {
+            Id = recordId,
+            JobId = AssignedJobId,
+            Content = "Old content"
+        });
+
+        var service = BuildService(repository);
+        var content = "Updated work notes.";
+
+        // Act
+        var result = await service.UpdateWorkRecordAsync(AssignedJobId, recordId, ActiveTechnicianId, content);
+
+        // Assert
+        Assert.True(result.IsSuccess);
+        Assert.NotNull(result.Value);
+        Assert.Equal(content, result.Value.Content);
+        
+        var updatedRecord = repository.StoredWorkRecords.Single();
+        Assert.Equal(content, updatedRecord.Content);
+    }
+
+    [Fact]
+    public async Task UpdateWorkRecordAsync_WhenRecordDoesNotExist_ReturnsWorkRecordNotFound()
+    {
+        // Arrange
+        var repository = new FakeJobRepository
+        {
+            JobToReturn = new Job
+            {
+                Id = AssignedJobId,
+                Status = "IN_PROGRESS",
+                AssignedTechnicianId = ActiveTechnicianId
+            }
+        };
+
+        var service = BuildService(repository);
+
+        // Act
+        var result = await service.UpdateWorkRecordAsync(AssignedJobId, "missing-record", ActiveTechnicianId, "New content");
+
+        // Assert
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ServiceError.WorkRecordNotFound, result.Error);
+    }
+
+    [Fact]
+    public async Task UpdateWorkRecordAsync_ByNonAssignee_ReturnsNotTheAssignee()
+    {
+        // Arrange
+        var repository = new FakeJobRepository
+        {
+            JobToReturn = new Job
+            {
+                Id = AssignedJobId,
+                Status = "IN_PROGRESS",
+                AssignedTechnicianId = ActiveTechnicianId
+            }
+        };
+
+        var recordId = Guid.NewGuid().ToString();
+        repository.StoredWorkRecords.Add(new ServiceWorkRecord
+        {
+            Id = recordId,
+            JobId = AssignedJobId,
+            Content = "Old content"
+        });
+
+        var service = BuildService(repository);
+        var otherTechnicianId = Guid.NewGuid().ToString();
+
+        // Act
+        var result = await service.UpdateWorkRecordAsync(AssignedJobId, recordId, otherTechnicianId, "New content");
+
+        // Assert
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ServiceError.NotTheAssignee, result.Error);
+    }
+>>>>>>> Stashed changes
 }

@@ -259,6 +259,200 @@ public class JobsController : ControllerBase
         return Ok(result.Value);
     }
 
+<<<<<<< Updated upstream
+=======
+    /// <summary>
+    /// Adds a service work record to an active job. The job must be in status IN_PROGRESS
+    /// and the caller must be the active assignee.
+    /// </summary>
+    /// <param name="id">The server-generated job id (a GUID string).</param>
+    /// <param name="request">The technician id and work record content.</param>
+    /// <response code="201">The work record was created and saved.</response>
+    /// <response code="400">TechnicianId was missing/invalid or content was missing/empty.</response>
+    /// <response code="403">The caller is not the active assignee of this job.</response>
+    /// <response code="404">No job exists with this id.</response>
+    /// <response code="409">The job is not in status IN_PROGRESS.</response>
+    [HttpPost("{id}/work-records")]
+    [ProducesResponseType(typeof(ServiceWorkRecordResponse), StatusCodes.Status201Created)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> AddWorkRecord(string id, [FromBody] CreateWorkRecordRequest request)
+    {
+        if (!Guid.TryParse(request.TechnicianId, out _))
+        {
+            return BadRequest(new ValidationProblemDetails(
+                new Dictionary<string, string[]>
+                {
+                    ["technicianId"] = new[] { "TechnicianId must be a valid GUID." }
+                })
+            {
+                Status = StatusCodes.Status400BadRequest
+            });
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Content))
+        {
+            return BadRequest(new ValidationProblemDetails(
+                new Dictionary<string, string[]>
+                {
+                    ["content"] = new[] { "Work record content is required." }
+                })
+            {
+                Status = StatusCodes.Status400BadRequest
+            });
+        }
+
+        var result = await _jobService.AddWorkRecordAsync(id, request.TechnicianId, request.Content);
+
+        if (result.Error == ServiceError.JobNotFound)
+            return NotFound();
+
+        if (result.Error == ServiceError.NotTheAssignee)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new ProblemDetails
+            {
+                Title = "Forbidden.",
+                Detail = "The supplied technician id is not the active assignee of this job.",
+                Status = StatusCodes.Status403Forbidden
+            });
+        }
+
+        if (result.Error == ServiceError.JobNotInProgress)
+        {
+            return Conflict(new ProblemDetails
+            {
+                Title = "Job is not in progress.",
+                Detail = "Work records can only be added to a job in status IN_PROGRESS.",
+                Status = StatusCodes.Status409Conflict
+            });
+        }
+
+        if (result.Error == ServiceError.MissingContent)
+        {
+            return BadRequest(new ValidationProblemDetails(
+                new Dictionary<string, string[]>
+                {
+                    ["content"] = new[] { "Work record content is required." }
+                })
+            {
+                Status = StatusCodes.Status400BadRequest
+            });
+        }
+
+        return CreatedAtAction(
+            nameof(GetWorkRecords),
+            new { id },
+            result.Value);
+    }
+
+    /// <summary>
+    /// Updates a service work record of an active job. The job must be in status IN_PROGRESS
+    /// and the caller must be the active assignee.
+    /// </summary>
+    /// <param name="id">The server-generated job id (a GUID string).</param>
+    /// <param name="recordId">The id of the work record to update.</param>
+    /// <param name="request">The technician id and updated work record content.</param>
+    /// <response code="200">The work record was updated and saved.</response>
+    /// <response code="400">TechnicianId was missing/invalid or content was missing/empty.</response>
+    /// <response code="403">The caller is not the active assignee of this job.</response>
+    /// <response code="404">No job or work record exists with the given ids.</response>
+    /// <response code="409">The job is not in status IN_PROGRESS.</response>
+    [HttpPut("{id}/work-records/{recordId}")]
+    [ProducesResponseType(typeof(ServiceWorkRecordResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> UpdateWorkRecord(string id, string recordId, [FromBody] UpdateWorkRecordRequest request)
+    {
+        if (!Guid.TryParse(request.TechnicianId, out _))
+        {
+            return BadRequest(new ValidationProblemDetails(
+                new Dictionary<string, string[]>
+                {
+                    ["technicianId"] = new[] { "TechnicianId must be a valid GUID." }
+                })
+            {
+                Status = StatusCodes.Status400BadRequest
+            });
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Content))
+        {
+            return BadRequest(new ValidationProblemDetails(
+                new Dictionary<string, string[]>
+                {
+                    ["content"] = new[] { "Work record content is required." }
+                })
+            {
+                Status = StatusCodes.Status400BadRequest
+            });
+        }
+
+        var result = await _jobService.UpdateWorkRecordAsync(id, recordId, request.TechnicianId, request.Content);
+
+        if (result.Error == ServiceError.JobNotFound || result.Error == ServiceError.WorkRecordNotFound)
+            return NotFound();
+
+        if (result.Error == ServiceError.NotTheAssignee)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new ProblemDetails
+            {
+                Title = "Forbidden.",
+                Detail = "The supplied technician id is not the active assignee of this job.",
+                Status = StatusCodes.Status403Forbidden
+            });
+        }
+
+        if (result.Error == ServiceError.JobNotInProgress)
+        {
+            return Conflict(new ProblemDetails
+            {
+                Title = "Job is not in progress.",
+                Detail = "Work records can only be updated on a job in status IN_PROGRESS.",
+                Status = StatusCodes.Status409Conflict
+            });
+        }
+
+        if (result.Error == ServiceError.MissingContent)
+        {
+            return BadRequest(new ValidationProblemDetails(
+                new Dictionary<string, string[]>
+                {
+                    ["content"] = new[] { "Work record content is required." }
+                })
+            {
+                Status = StatusCodes.Status400BadRequest
+            });
+        }
+
+        return Ok(result.Value);
+    }
+
+    /// <summary>
+    /// Retrieves all service work records for the specified job.
+    /// </summary>
+    /// <param name="id">The server-generated job id (a GUID string).</param>
+    /// <response code="200">The list of service work records for this job.</response>
+    /// <response code="404">No job exists with this id.</response>
+    [HttpGet("{id}/work-records")]
+    [ProducesResponseType(typeof(IReadOnlyList<ServiceWorkRecordResponse>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetWorkRecords(string id)
+    {
+        var records = await _jobService.GetWorkRecordsAsync(id);
+
+        if (records is null)
+        {
+            return NotFound();
+        }
+
+        return Ok(records);
+    }
+
+>>>>>>> Stashed changes
     private static ValidationProblemDetails InvalidFilter(string field, string message) =>
         new(new Dictionary<string, string[]> { [field] = new[] { message } })
         {
