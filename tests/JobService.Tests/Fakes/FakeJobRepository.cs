@@ -147,6 +147,45 @@ public class FakeJobRepository : IJobRepository
 
         return Task.FromResult(StartJobAsyncResult);
     }
+<<<<<<< Updated upstream
+=======
+
+
+    // AddWorkRecordAsync & GetWorkRecordsByJobIdAsync
+    public readonly List<ServiceWorkRecord> StoredWorkRecords = new();
+    public ServiceWorkRecord? LastAddedWorkRecord;
+    public int AddWorkRecordCallCount;
+
+    public Task<ServiceWorkRecord> AddWorkRecordAsync(ServiceWorkRecord record)
+    {
+        StoredWorkRecords.Add(record);
+        LastAddedWorkRecord = record;
+        AddWorkRecordCallCount++;
+        return Task.FromResult(record);
+    }
+
+    public Task<IReadOnlyList<ServiceWorkRecord>> GetWorkRecordsByJobIdAsync(string jobId)
+    {
+        IReadOnlyList<ServiceWorkRecord> list = StoredWorkRecords
+            .Where(r => r.JobId == jobId)
+            .OrderBy(r => r.RecordedAt)
+            .ToList();
+        return Task.FromResult(list);
+    }
+
+    public Task<bool> UpdateWorkRecordAsync(string recordId, string jobId, string content)
+    {
+        var record = StoredWorkRecords.FirstOrDefault(r => r.Id == recordId && r.JobId == jobId);
+        if (record is null)
+        {
+            return Task.FromResult(false);
+        }
+
+        record.Content = content;
+        return Task.FromResult(true);
+    }
+
+>>>>>>> Stashed changes
 }
 
 // One recorded AppliedAssignment call. A record rather than the Job model:
