@@ -149,6 +149,69 @@ public class JobService
         return Result<JobResponse>.Success(MapToResponse(updated));
     }
 
+    /// <summary>
+    /// Records work performed by the active assignee on an IN_PROGRESS job.
+    /// Rejects requests with missing content, unassigned/wrong technician, or non-IN_PROGRESS status.
+    /// </summary>
+    public async Task<Result<ServiceWorkRecordResponse>> AddWorkRecordAsync(
+        string jobId,
+        string callerTechnicianId,
+        string content)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            return Result<ServiceWorkRecordResponse>.Failure(ServiceError.MissingContent);
+        }
+
+        var job = await _repository.GetByIdAsync(jobId);
+        if (job is null)
+        {
+            return Result<ServiceWorkRecordResponse>.Failure(ServiceError.JobNotFound);
+        }
+
+        if (job.Status != InProgressStatus)
+        {
+            return Result<ServiceWorkRecordResponse>.Failure(ServiceError.JobNotInProgress);
+        }
+
+        if (!string.Equals(job.AssignedTechnicianId, callerTechnicianId, StringComparison.OrdinalIgnoreCase))
+        {
+            return Result<ServiceWorkRecordResponse>.Failure(ServiceError.NotTheAssignee);
+        }
+
+        var now = DateTime.UtcNow;
+        var record = new ServiceWorkRecord
+        {
+            Id = Guid.NewGuid().ToString(),
+            JobId = job.Id,
+            JobReference = job.JobReference,
+            TechnicianId = callerTechnicianId,
+            TechnicianReference = job.AssignedTechnicianReference ?? string.Empty,
+            Content = content.Trim(),
+            RecordedAt = now,
+            CreatedAt = now
+        };
+
+        var persisted = await _repository.AddWorkRecordAsync(record);
+        return Result<ServiceWorkRecordResponse>.Success(MapToWorkRecordResponse(persisted));
+    }
+
+    /// <summary>
+    /// Retrieves all service work records for a given job. Returns null if the job does not exist.
+    /// </summary>
+    public async Task<IReadOnlyList<ServiceWorkRecordResponse>?> GetWorkRecordsAsync(string jobId)
+    {
+        var job = await _repository.GetByIdAsync(jobId);
+        if (job is null)
+        {
+            return null;
+        }
+
+        var records = await _repository.GetWorkRecordsByJobIdAsync(jobId);
+        return records.Select(MapToWorkRecordResponse).ToList();
+    }
+
+
     // Generates a reference and inserts, treating a duplicate-key failure as a
     // reason to draw a new reference rather than as an error. The unique index
     // is what detects the collision - there is no pre-check, because two
@@ -301,4 +364,17 @@ public class JobService
         CreatedAt = job.CreatedAt,
         UpdatedAt = job.UpdatedAt
     };
+
+    private static ServiceWorkRecordResponse MapToWorkRecordResponse(ServiceWorkRecord record) => new()
+    {
+        Id = record.Id,
+        JobId = record.JobId,
+        JobReference = record.JobReference,
+        TechnicianId = record.TechnicianId,
+        TechnicianReference = record.TechnicianReference,
+        Content = record.Content,
+        RecordedAt = record.RecordedAt,
+        CreatedAt = record.CreatedAt
+    };
 }
+

@@ -272,4 +272,88 @@ public class JobRepository : IJobRepository
             UpdatedAt = reader.GetDateTime(updatedAtOrdinal)
         };
     }
+
+    public async Task<ServiceWorkRecord> AddWorkRecordAsync(ServiceWorkRecord record)
+    {
+        await using var connection = _connectionFactory.CreateConnection();
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            INSERT INTO service_work_records (
+                id,
+                job_id,
+                job_reference,
+                technician_id,
+                technician_reference,
+                content,
+                recorded_at,
+                created_at
+            ) VALUES (
+                @id,
+                @jobId,
+                @jobReference,
+                @technicianId,
+                @technicianReference,
+                @content,
+                @recordedAt,
+                @createdAt
+            );";
+
+        command.Parameters.AddWithValue("@id", record.Id);
+        command.Parameters.AddWithValue("@jobId", record.JobId);
+        command.Parameters.AddWithValue("@jobReference", record.JobReference);
+        command.Parameters.AddWithValue("@technicianId", record.TechnicianId);
+        command.Parameters.AddWithValue("@technicianReference", record.TechnicianReference);
+        command.Parameters.AddWithValue("@content", record.Content);
+        command.Parameters.AddWithValue("@recordedAt", record.RecordedAt);
+        command.Parameters.AddWithValue("@createdAt", record.CreatedAt);
+
+        await command.ExecuteNonQueryAsync();
+        return record;
+    }
+
+    public async Task<IReadOnlyList<ServiceWorkRecord>> GetWorkRecordsByJobIdAsync(string jobId)
+    {
+        await using var connection = _connectionFactory.CreateConnection();
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            SELECT id, job_id, job_reference, technician_id, technician_reference, content, recorded_at, created_at
+            FROM service_work_records
+            WHERE job_id = @jobId
+            ORDER BY recorded_at ASC;";
+
+        command.Parameters.AddWithValue("@jobId", jobId);
+
+        await using var reader = (MySqlDataReader)await command.ExecuteReaderAsync();
+        var records = new List<ServiceWorkRecord>();
+        while (await reader.ReadAsync())
+        {
+            var idOrdinal = reader.GetOrdinal("id");
+            var jobIdOrdinal = reader.GetOrdinal("job_id");
+            var jobReferenceOrdinal = reader.GetOrdinal("job_reference");
+            var technicianIdOrdinal = reader.GetOrdinal("technician_id");
+            var technicianReferenceOrdinal = reader.GetOrdinal("technician_reference");
+            var contentOrdinal = reader.GetOrdinal("content");
+            var recordedAtOrdinal = reader.GetOrdinal("recorded_at");
+            var createdAtOrdinal = reader.GetOrdinal("created_at");
+
+            records.Add(new ServiceWorkRecord
+            {
+                Id = reader.GetValue(idOrdinal)?.ToString() ?? string.Empty,
+                JobId = reader.GetValue(jobIdOrdinal)?.ToString() ?? string.Empty,
+                JobReference = reader.GetString(jobReferenceOrdinal),
+                TechnicianId = reader.GetValue(technicianIdOrdinal)?.ToString() ?? string.Empty,
+                TechnicianReference = reader.GetString(technicianReferenceOrdinal),
+                Content = reader.GetString(contentOrdinal),
+                RecordedAt = reader.GetDateTime(recordedAtOrdinal),
+                CreatedAt = reader.GetDateTime(createdAtOrdinal)
+            });
+        }
+
+        return records;
+    }
 }
+

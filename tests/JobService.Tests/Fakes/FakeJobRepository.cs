@@ -147,6 +147,28 @@ public class FakeJobRepository : IJobRepository
 
         return Task.FromResult(StartJobAsyncResult);
     }
+
+    // AddWorkRecordAsync & GetWorkRecordsByJobIdAsync
+    public readonly List<ServiceWorkRecord> StoredWorkRecords = new();
+    public ServiceWorkRecord? LastAddedWorkRecord;
+    public int AddWorkRecordCallCount;
+
+    public Task<ServiceWorkRecord> AddWorkRecordAsync(ServiceWorkRecord record)
+    {
+        StoredWorkRecords.Add(record);
+        LastAddedWorkRecord = record;
+        AddWorkRecordCallCount++;
+        return Task.FromResult(record);
+    }
+
+    public Task<IReadOnlyList<ServiceWorkRecord>> GetWorkRecordsByJobIdAsync(string jobId)
+    {
+        IReadOnlyList<ServiceWorkRecord> list = StoredWorkRecords
+            .Where(r => r.JobId == jobId)
+            .OrderBy(r => r.RecordedAt)
+            .ToList();
+        return Task.FromResult(list);
+    }
 }
 
 // One recorded AppliedAssignment call. A record rather than the Job model:
