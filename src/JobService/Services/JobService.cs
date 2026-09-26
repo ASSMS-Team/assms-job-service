@@ -149,9 +149,6 @@ public class JobService
         return Result<JobResponse>.Success(MapToResponse(updated));
     }
 
-<<<<<<< Updated upstream
-=======
-
     /// <summary>
     /// Records work performed by the active assignee on an IN_PROGRESS job.
     /// Rejects requests with missing content, unassigned/wrong technician, or non-IN_PROGRESS status.
@@ -200,50 +197,6 @@ public class JobService
     }
 
     /// <summary>
-    /// Updates the content of an existing service work record.
-    /// Rejects requests with missing content, unassigned/wrong technician, non-IN_PROGRESS status, or if the record is missing.
-    /// </summary>
-    public async Task<Result<ServiceWorkRecordResponse>> UpdateWorkRecordAsync(
-        string jobId,
-        string recordId,
-        string callerTechnicianId,
-        string content)
-    {
-        if (string.IsNullOrWhiteSpace(content))
-        {
-            return Result<ServiceWorkRecordResponse>.Failure(ServiceError.MissingContent);
-        }
-
-        var job = await _repository.GetByIdAsync(jobId);
-        if (job is null)
-        {
-            return Result<ServiceWorkRecordResponse>.Failure(ServiceError.JobNotFound);
-        }
-
-        if (job.Status != InProgressStatus)
-        {
-            return Result<ServiceWorkRecordResponse>.Failure(ServiceError.JobNotInProgress);
-        }
-
-        if (!string.Equals(job.AssignedTechnicianId, callerTechnicianId, StringComparison.OrdinalIgnoreCase))
-        {
-            return Result<ServiceWorkRecordResponse>.Failure(ServiceError.NotTheAssignee);
-        }
-
-        var changed = await _repository.UpdateWorkRecordAsync(recordId, jobId, content.Trim());
-        if (!changed)
-        {
-            return Result<ServiceWorkRecordResponse>.Failure(ServiceError.WorkRecordNotFound);
-        }
-
-        var records = await _repository.GetWorkRecordsByJobIdAsync(jobId);
-        var updatedRecord = records.FirstOrDefault(r => r.Id == recordId) ?? throw new InvalidOperationException(
-            $"Work record {recordId} on job {jobId} was just updated but could not be read back.");
-
-        return Result<ServiceWorkRecordResponse>.Success(MapToWorkRecordResponse(updatedRecord));
-    }
-
-    /// <summary>
     /// Retrieves all service work records for a given job. Returns null if the job does not exist.
     /// </summary>
     public async Task<IReadOnlyList<ServiceWorkRecordResponse>?> GetWorkRecordsAsync(string jobId)
@@ -258,20 +211,7 @@ public class JobService
         return records.Select(MapToWorkRecordResponse).ToList();
     }
 
-    private static ServiceWorkRecordResponse MapToWorkRecordResponse(ServiceWorkRecord record) =>
-        new()
-        {
-            Id = record.Id,
-            JobId = record.JobId,
-            JobReference = record.JobReference,
-            TechnicianId = record.TechnicianId,
-            TechnicianReference = record.TechnicianReference,
-            Content = record.Content,
-            RecordedAt = record.RecordedAt,
-            CreatedAt = record.CreatedAt
-        };
 
->>>>>>> Stashed changes
     // Generates a reference and inserts, treating a duplicate-key failure as a
     // reason to draw a new reference rather than as an error. The unique index
     // is what detects the collision - there is no pre-check, because two
@@ -424,4 +364,17 @@ public class JobService
         CreatedAt = job.CreatedAt,
         UpdatedAt = job.UpdatedAt
     };
+
+    private static ServiceWorkRecordResponse MapToWorkRecordResponse(ServiceWorkRecord record) => new()
+    {
+        Id = record.Id,
+        JobId = record.JobId,
+        JobReference = record.JobReference,
+        TechnicianId = record.TechnicianId,
+        TechnicianReference = record.TechnicianReference,
+        Content = record.Content,
+        RecordedAt = record.RecordedAt,
+        CreatedAt = record.CreatedAt
+    };
 }
+

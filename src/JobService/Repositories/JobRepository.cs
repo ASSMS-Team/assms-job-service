@@ -272,8 +272,6 @@ public class JobRepository : IJobRepository
             UpdatedAt = reader.GetDateTime(updatedAtOrdinal)
         };
     }
-<<<<<<< Updated upstream
-=======
 
     public async Task<ServiceWorkRecord> AddWorkRecordAsync(ServiceWorkRecord record)
     {
@@ -357,24 +355,5 @@ public class JobRepository : IJobRepository
 
         return records;
     }
-
-    public async Task<bool> UpdateWorkRecordAsync(string recordId, string jobId, string content)
-    {
-        await using var connection = _connectionFactory.CreateConnection();
-        await connection.OpenAsync();
-
-        await using var command = connection.CreateCommand();
-        command.CommandText = @"
-            UPDATE service_work_records
-            SET content = @content
-            WHERE id = @recordId AND job_id = @jobId;";
-
-        command.Parameters.AddWithValue("@recordId", recordId);
-        command.Parameters.AddWithValue("@jobId", jobId);
-        command.Parameters.AddWithValue("@content", content);
-
-        var rowsAffected = await command.ExecuteNonQueryAsync();
-        return rowsAffected > 0;
-    }
->>>>>>> Stashed changes
 }
+
