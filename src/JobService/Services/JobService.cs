@@ -90,6 +90,16 @@ public class JobService
 
         await PublishJobCreatedAsync(created);
 
+        await _repository.AddStatusHistoryAsync(new JobStatusHistory
+        {
+            Id = Guid.NewGuid().ToString(),
+            JobId = created.Id,
+            PreviousStatus = null,
+            NewStatus = created.Status,
+            ActorId = UnattributedCreatedBy,
+            CreatedAt = created.CreatedAt
+        });
+
         return Result<JobResponse>.Success(MapToResponse(created));
     }
 
@@ -145,6 +155,16 @@ public class JobService
             $"Job {jobId} was just updated to IN_PROGRESS but could not be read back.");
 
         await PublishJobStatusChangedAsync(updated, oldStatus: AssignedStatus);
+
+        await _repository.AddStatusHistoryAsync(new JobStatusHistory
+        {
+            Id = Guid.NewGuid().ToString(),
+            JobId = updated.Id,
+            PreviousStatus = AssignedStatus,
+            NewStatus = updated.Status,
+            ActorId = callerTechnicianId,
+            CreatedAt = updated.UpdatedAt // Not exactly started_at, but updated_at moves simultaneously
+        });
 
         return Result<JobResponse>.Success(MapToResponse(updated));
     }
@@ -254,7 +274,6 @@ public class JobService
 
         return Result<ServiceWorkRecordResponse>.Success(MapToWorkRecordResponse(record));
     }
-
 
     // Generates a reference and inserts, treating a duplicate-key failure as a
     // reason to draw a new reference rather than as an error. The unique index
@@ -368,6 +387,30 @@ public class JobService
                 job.Status,
                 JobStatusChangedPayload.EventType);
         }
+    }
+
+    /// <summary>
+    /// Retrieves the status history of a job. Returns null if the job does not exist.
+    /// </summary>
+    public async Task<IReadOnlyList<JobStatusHistoryResponse>?> GetStatusHistoryAsync(string jobId)
+    {
+        var job = await _repository.GetByIdAsync(jobId);
+        if (job is null)
+        {
+            return null;
+        }
+
+        var history = await _repository.GetStatusHistoryAsync(jobId);
+
+        return history.Select(h => new JobStatusHistoryResponse
+        {
+            Id = h.Id,
+            JobId = h.JobId,
+            PreviousStatus = h.PreviousStatus,
+            NewStatus = h.NewStatus,
+            ActorId = h.ActorId,
+            CreatedAt = h.CreatedAt
+        }).ToList();
     }
 
     private static ServiceError MapValidationOutcome(AssetValidationOutcome outcome) => outcome switch

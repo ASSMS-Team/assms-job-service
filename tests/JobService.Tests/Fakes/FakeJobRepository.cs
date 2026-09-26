@@ -148,6 +148,7 @@ public class FakeJobRepository : IJobRepository
         return Task.FromResult(StartJobAsyncResult);
     }
 
+
     // AddWorkRecordAsync & GetWorkRecordsByJobIdAsync
     public readonly List<ServiceWorkRecord> StoredWorkRecords = new();
     public ServiceWorkRecord? LastAddedWorkRecord;
@@ -180,6 +181,23 @@ public class FakeJobRepository : IJobRepository
 
         record.Content = content;
         return Task.FromResult(true);
+    }
+
+    public List<JobStatusHistory> StoredStatusHistories = new();
+
+    public Task AddStatusHistoryAsync(JobStatusHistory history)
+    {
+        StoredStatusHistories.Add(history);
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyList<JobStatusHistory>> GetStatusHistoryAsync(string jobId)
+    {
+        IReadOnlyList<JobStatusHistory> list = StoredStatusHistories
+            .Where(h => h.JobId == jobId)
+            .OrderBy(h => h.CreatedAt)
+            .ToList();
+        return Task.FromResult(list);
     }
 }
 
