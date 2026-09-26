@@ -1,6 +1,7 @@
 using JobService.DTOs;
 using JobService.Security;
 using JobService.Services;
+using System.Text.Json;
 
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -464,6 +465,97 @@ public class JobsController : ControllerBase
         }
 
         return Ok(result.Value);
+    }
+
+    /// <summary>
+    /// Deletes a draft work record from an in-progress job. Only the active assignee may delete it.
+    /// </summary>
+    /// <param name="id">The server-generated job id (a GUID string).</param>
+    /// <param name="recordId">The server-generated work record id.</param>
+    /// <param name="technicianId">The id of the technician requesting the deletion.</param>
+    /// <response code="204">The work record was removed.</response>
+    /// <response code="400">TechnicianId was missing or not a valid GUID.</response>
+    /// <response code="403">The caller is not the active assignee of this job.</response>
+    /// <response code="404">No job or work record exists with this id.</response>
+    /// <response code="409">The job is not in status IN_PROGRESS.</response>
+    [HttpDelete("{id}/work-records/{recordId}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> DeleteWorkRecord(
+        string id,
+        string recordId,
+        [FromQuery] string? technicianId)
+    {
+        var effectiveTechnicianId = technicianId;
+        if (string.IsNullOrWhiteSpace(effectiveTechnicianId) && Request.Headers.TryGetValue("X-Technician-Id", out var headerTechId))
+        {
+            effectiveTechnicianId = headerTechId.FirstOrDefault();
+        }
+
+        if (string.IsNullOrWhiteSpace(effectiveTechnicianId) && Request.HasJsonContentType())
+        {
+            try
+            {
+                using var reader = new StreamReader(Request.Body);
+                var bodyStr = await reader.ReadToEndAsync();
+                if (!string.IsNullOrWhiteSpace(bodyStr))
+                {
+                    using var doc = JsonDocument.Parse(bodyStr);
+                    if (doc.RootElement.TryGetProperty("technicianId", out var prop))
+                    {
+                        effectiveTechnicianId = prop.GetString();
+                    }
+                }
+            }
+            catch
+            {
+                // Fall through to validation below
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(effectiveTechnicianId) || !Guid.TryParse(effectiveTechnicianId, out _))
+        {
+            return BadRequest(new ValidationProblemDetails(
+                new Dictionary<string, string[]>
+                {
+                    ["technicianId"] = new[] { "TechnicianId must be a valid GUID." }
+                })
+            {
+                Status = StatusCodes.Status400BadRequest
+            });
+        }
+
+        var result = await _jobService.DeleteWorkRecordAsync(id, recordId, effectiveTechnicianId);
+
+        if (result.Error is ServiceError.JobNotFound or ServiceError.WorkRecordNotFound)
+        {
+            return NotFound();
+        }
+
+        if (result.Error == ServiceError.NotTheAssignee)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new ProblemDetails
+            {
+                Title = "Forbidden.",
+                Detail = "The supplied technician id is not the active assignee of this job.",
+                Status = StatusCodes.Status403Forbidden
+            });
+        }
+
+        if (result.Error == ServiceError.JobNotInProgress)
+        {
+            return Conflict(new ProblemDetails
+            {
+                Title = "Job is not in progress.",
+                Detail = "Work records can only be deleted from a job in status IN_PROGRESS.",
+                Status = StatusCodes.Status409Conflict
+            });
+        }
+
+        return NoContent();
     }
 
     private static ValidationProblemDetails InvalidFilter(string field, string message) =>

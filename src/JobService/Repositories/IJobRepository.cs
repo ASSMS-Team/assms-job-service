@@ -58,6 +58,9 @@ public interface IJobRepository
     /// <summary>Updates the content of a work record belonging to the specified job.</summary>
     Task<bool> UpdateWorkRecordAsync(string recordId, string jobId, string content);
 
+    /// <summary>Deletes a work record belonging to the specified job.</summary>
+    Task<bool> DeleteWorkRecordAsync(string recordId, string jobId);
+
     Task AddStatusHistoryAsync(JobStatusHistory history);
 
     Task<IReadOnlyList<JobStatusHistory>> GetStatusHistoryAsync(string jobId);

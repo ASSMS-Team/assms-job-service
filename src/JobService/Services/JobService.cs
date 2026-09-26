@@ -275,6 +275,36 @@ public class JobService
         return Result<ServiceWorkRecordResponse>.Success(MapToWorkRecordResponse(record));
     }
 
+    /// <summary>
+    /// Deletes a draft work record from an in-progress job. Only the active assignee may delete it.
+    /// </summary>
+    public async Task<Result<bool>> DeleteWorkRecordAsync(string jobId, string recordId, string callerTechnicianId)
+    {
+        var job = await _repository.GetByIdAsync(jobId);
+        if (job is null)
+        {
+            return Result<bool>.Failure(ServiceError.JobNotFound);
+        }
+
+        if (job.Status != InProgressStatus)
+        {
+            return Result<bool>.Failure(ServiceError.JobNotInProgress);
+        }
+
+        if (!string.Equals(job.AssignedTechnicianId, callerTechnicianId, StringComparison.OrdinalIgnoreCase))
+        {
+            return Result<bool>.Failure(ServiceError.NotTheAssignee);
+        }
+
+        var deleted = await _repository.DeleteWorkRecordAsync(recordId, jobId);
+        if (!deleted)
+        {
+            return Result<bool>.Failure(ServiceError.WorkRecordNotFound);
+        }
+
+        return Result<bool>.Success(true);
+    }
+
     // Generates a reference and inserts, treating a duplicate-key failure as a
     // reason to draw a new reference rather than as an error. The unique index
     // is what detects the collision - there is no pre-check, because two

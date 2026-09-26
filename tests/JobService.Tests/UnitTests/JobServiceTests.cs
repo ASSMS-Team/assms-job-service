@@ -877,5 +877,84 @@ public class JobServiceTests
         Assert.False(result.IsSuccess);
         Assert.Equal(ServiceError.NotTheAssignee, result.Error);
     }
+
+    // =========================================================================
+    // US-11D: Delete or Correct Draft Work Record Tests
+    // =========================================================================
+
+    [Fact]
+    public async Task DeleteWorkRecordAsync_ByActiveAssigneeOnInProgressJob_SucceedsAndRemovesRecord()
+    {
+        var repository = new FakeJobRepository { JobToReturn = InProgressJob(DateTime.UtcNow) };
+        var service = BuildService(repository);
+
+        var record = new ServiceWorkRecord
+        {
+            Id = Guid.NewGuid().ToString(),
+            JobId = AssignedJobId,
+            JobReference = "JOB-1ARDN1",
+            TechnicianId = ActiveTechnicianId,
+            TechnicianReference = "TEC-032",
+            Content = "Draft work notes to be removed",
+            RecordedAt = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow
+        };
+        repository.StoredWorkRecords.Add(record);
+
+        var result = await service.DeleteWorkRecordAsync(AssignedJobId, record.Id, ActiveTechnicianId);
+
+        Assert.True(result.IsSuccess);
+        Assert.True(result.Value);
+        Assert.DoesNotContain(repository.StoredWorkRecords, r => r.Id == record.Id);
+    }
+
+    [Fact]
+    public async Task DeleteWorkRecordAsync_WhenJobDoesNotExist_ReturnsJobNotFound()
+    {
+        var repository = new FakeJobRepository { JobToReturn = null };
+        var service = BuildService(repository);
+
+        var result = await service.DeleteWorkRecordAsync("missing-job", "record-id", ActiveTechnicianId);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ServiceError.JobNotFound, result.Error);
+    }
+
+    [Fact]
+    public async Task DeleteWorkRecordAsync_WhenJobNotInProgress_ReturnsJobNotInProgress()
+    {
+        // Job is in ASSIGNED status, not IN_PROGRESS
+        var repository = new FakeJobRepository { JobToReturn = AssignedJob() };
+        var service = BuildService(repository);
+
+        var result = await service.DeleteWorkRecordAsync(AssignedJobId, "record-id", ActiveTechnicianId);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ServiceError.JobNotInProgress, result.Error);
+    }
+
+    [Fact]
+    public async Task DeleteWorkRecordAsync_WhenRecordDoesNotExist_ReturnsWorkRecordNotFound()
+    {
+        var repository = new FakeJobRepository { JobToReturn = InProgressJob(DateTime.UtcNow) };
+        var service = BuildService(repository);
+
+        var result = await service.DeleteWorkRecordAsync(AssignedJobId, "non-existent-record", ActiveTechnicianId);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ServiceError.WorkRecordNotFound, result.Error);
+    }
+
+    [Fact]
+    public async Task DeleteWorkRecordAsync_ByNonAssignee_ReturnsNotTheAssignee()
+    {
+        var repository = new FakeJobRepository { JobToReturn = InProgressJob(DateTime.UtcNow) };
+        var service = BuildService(repository);
+
+        var result = await service.DeleteWorkRecordAsync(AssignedJobId, Guid.NewGuid().ToString(), "unauthorized-technician");
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ServiceError.NotTheAssignee, result.Error);
+    }
 }
 

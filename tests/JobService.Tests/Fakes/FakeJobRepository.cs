@@ -183,6 +183,18 @@ public class FakeJobRepository : IJobRepository
         return Task.FromResult(true);
     }
 
+    public Task<bool> DeleteWorkRecordAsync(string recordId, string jobId)
+    {
+        var record = StoredWorkRecords.FirstOrDefault(item => item.Id == recordId && item.JobId == jobId);
+        if (record is null)
+        {
+            return Task.FromResult(false);
+        }
+
+        StoredWorkRecords.Remove(record);
+        return Task.FromResult(true);
+    }
+
     public List<JobStatusHistory> StoredStatusHistories = new();
 
     public Task AddStatusHistoryAsync(JobStatusHistory history)

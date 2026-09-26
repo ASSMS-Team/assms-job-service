@@ -394,6 +394,23 @@ public class JobRepository : IJobRepository
         return Convert.ToInt32(exists) == 1;
     }
 
+    public async Task<bool> DeleteWorkRecordAsync(string recordId, string jobId)
+    {
+        await using var connection = _connectionFactory.CreateConnection();
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            DELETE FROM service_work_records
+            WHERE id = @recordId AND job_id = @jobId;";
+
+        command.Parameters.AddWithValue("@recordId", recordId);
+        command.Parameters.AddWithValue("@jobId", jobId);
+
+        var rowsAffected = await command.ExecuteNonQueryAsync();
+        return rowsAffected > 0;
+    }
+
     public async Task AddStatusHistoryAsync(JobStatusHistory history)
     {
         await using var connection = _connectionFactory.CreateConnection();
