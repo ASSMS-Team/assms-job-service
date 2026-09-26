@@ -49,6 +49,9 @@ public interface IJobRepository
     // the appropriate error to the controller.
     Task<bool> StartJobAsync(string jobId, string technicianId, DateTime startedAt);
 
+    /// <summary>Transitions the job from IN_PROGRESS → COMPLETED, recording completed_at.</summary>
+    Task<bool> CompleteJobAsync(string jobId, string technicianId, DateTime completedAt);
+
     /// <summary>Persists a service work record for an active job.</summary>
     Task<ServiceWorkRecord> AddWorkRecordAsync(ServiceWorkRecord record);
 

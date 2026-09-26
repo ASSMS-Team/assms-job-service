@@ -31,6 +31,8 @@ public class JobService
 
     private const string InProgressStatus = "IN_PROGRESS";
 
+    private const string CompletedStatus = "COMPLETED";
+
     private readonly IJobRepository _repository;
     // customerdb belongs to another service, so whether the asset and customer
     // are usable is a question that can only be asked over HTTP.
@@ -164,6 +166,53 @@ public class JobService
             NewStatus = updated.Status,
             ActorId = callerTechnicianId,
             CreatedAt = updated.UpdatedAt // Not exactly started_at, but updated_at moves simultaneously
+        });
+
+        return Result<JobResponse>.Success(MapToResponse(updated));
+    }
+
+    // Transitions a job from IN_PROGRESS to COMPLETED on behalf of the active assignee.
+    // Requires at least one service work record to exist before completion.
+    public async Task<Result<JobResponse>> CompleteJobAsync(string jobId, string callerTechnicianId)
+    {
+        var existing = await _repository.GetByIdAsync(jobId);
+
+        if (existing is null)
+            return Result<JobResponse>.Failure(ServiceError.JobNotFound);
+
+        if (existing.Status != InProgressStatus)
+            return Result<JobResponse>.Failure(ServiceError.JobNotInProgress);
+
+        if (!string.Equals(existing.AssignedTechnicianId, callerTechnicianId, StringComparison.OrdinalIgnoreCase))
+            return Result<JobResponse>.Failure(ServiceError.NotTheAssignee);
+
+        var workRecords = await _repository.GetWorkRecordsByJobIdAsync(jobId);
+        if (workRecords.Count == 0)
+        {
+            return Result<JobResponse>.Failure(ServiceError.WorkRecordsRequired);
+        }
+
+        var completedAt = DateTime.UtcNow;
+        var changed = await _repository.CompleteJobAsync(jobId, callerTechnicianId, completedAt);
+
+        if (!changed)
+        {
+            return Result<JobResponse>.Failure(ServiceError.JobNotInProgress);
+        }
+
+        var updated = await _repository.GetByIdAsync(jobId) ?? throw new InvalidOperationException(
+            $"Job {jobId} was just updated to COMPLETED but could not be read back.");
+
+        await PublishJobStatusChangedAsync(updated, oldStatus: InProgressStatus);
+
+        await _repository.AddStatusHistoryAsync(new JobStatusHistory
+        {
+            Id = Guid.NewGuid().ToString(),
+            JobId = updated.Id,
+            PreviousStatus = InProgressStatus,
+            NewStatus = updated.Status,
+            ActorId = callerTechnicianId,
+            CreatedAt = completedAt
         });
 
         return Result<JobResponse>.Success(MapToResponse(updated));
@@ -395,9 +444,9 @@ public class JobService
                 TechnicianReference = job.AssignedTechnicianReference,
                 OldStatus = oldStatus,
                 NewStatus = job.Status,
-                // Use the stored started_at rather than a fresh UtcNow so the
+                // Use the stored completed_at / started_at rather than a fresh UtcNow so the
                 // event's business time matches what is in the database.
-                OccurredAt = job.StartedAt ?? DateTime.UtcNow
+                OccurredAt = (job.Status == CompletedStatus ? job.CompletedAt : job.StartedAt) ?? DateTime.UtcNow
             };
 
             await _eventPublisher.PublishAsync(
@@ -478,6 +527,7 @@ public class JobService
                 AssignedAt = job.AssignedAt.Value
             },
         StartedAt = job.StartedAt,
+        CompletedAt = job.CompletedAt,
         CreatedAt = job.CreatedAt,
         UpdatedAt = job.UpdatedAt
     };
