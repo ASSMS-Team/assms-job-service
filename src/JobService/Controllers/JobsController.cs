@@ -259,8 +259,6 @@ public class JobsController : ControllerBase
         return Ok(result.Value);
     }
 
-<<<<<<< Updated upstream
-=======
     /// <summary>
     /// Adds a service work record to an active job. The job must be in status IN_PROGRESS
     /// and the caller must be the active assignee.
@@ -348,17 +346,30 @@ public class JobsController : ControllerBase
     }
 
     /// <summary>
-    /// Updates a service work record of an active job. The job must be in status IN_PROGRESS
-    /// and the caller must be the active assignee.
+    /// Retrieves all service work records for the specified job.
     /// </summary>
     /// <param name="id">The server-generated job id (a GUID string).</param>
-    /// <param name="recordId">The id of the work record to update.</param>
-    /// <param name="request">The technician id and updated work record content.</param>
-    /// <response code="200">The work record was updated and saved.</response>
-    /// <response code="400">TechnicianId was missing/invalid or content was missing/empty.</response>
-    /// <response code="403">The caller is not the active assignee of this job.</response>
-    /// <response code="404">No job or work record exists with the given ids.</response>
-    /// <response code="409">The job is not in status IN_PROGRESS.</response>
+    /// <response code="200">The list of service work records for this job.</response>
+    /// <response code="404">No job exists with this id.</response>
+    [HttpGet("{id}/work-records")]
+    [Authorize(Roles = StaffRoles.JobViewers)]
+    [ProducesResponseType(typeof(IReadOnlyList<ServiceWorkRecordResponse>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetWorkRecords(string id)
+    {
+        var records = await _jobService.GetWorkRecordsAsync(id);
+
+        if (records is null)
+        {
+            return NotFound();
+        }
+
+        return Ok(records);
+    }
+
+    /// <summary>
+    /// Updates a work record on an in-progress job. Only the active assignee may update it.
+    /// </summary>
     [HttpPut("{id}/work-records/{recordId}")]
     [ProducesResponseType(typeof(ServiceWorkRecordResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
@@ -393,8 +404,10 @@ public class JobsController : ControllerBase
 
         var result = await _jobService.UpdateWorkRecordAsync(id, recordId, request.TechnicianId, request.Content);
 
-        if (result.Error == ServiceError.JobNotFound || result.Error == ServiceError.WorkRecordNotFound)
+        if (result.Error is ServiceError.JobNotFound or ServiceError.WorkRecordNotFound)
+        {
             return NotFound();
+        }
 
         if (result.Error == ServiceError.NotTheAssignee)
         {
@@ -431,28 +444,6 @@ public class JobsController : ControllerBase
         return Ok(result.Value);
     }
 
-    /// <summary>
-    /// Retrieves all service work records for the specified job.
-    /// </summary>
-    /// <param name="id">The server-generated job id (a GUID string).</param>
-    /// <response code="200">The list of service work records for this job.</response>
-    /// <response code="404">No job exists with this id.</response>
-    [HttpGet("{id}/work-records")]
-    [ProducesResponseType(typeof(IReadOnlyList<ServiceWorkRecordResponse>), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> GetWorkRecords(string id)
-    {
-        var records = await _jobService.GetWorkRecordsAsync(id);
-
-        if (records is null)
-        {
-            return NotFound();
-        }
-
-        return Ok(records);
-    }
-
->>>>>>> Stashed changes
     private static ValidationProblemDetails InvalidFilter(string field, string message) =>
         new(new Dictionary<string, string[]> { [field] = new[] { message } })
         {

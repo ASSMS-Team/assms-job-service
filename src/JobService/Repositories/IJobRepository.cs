@@ -48,8 +48,6 @@ public interface IJobRepository
     // possible reasons (not found, wrong status, wrong technician) and returns
     // the appropriate error to the controller.
     Task<bool> StartJobAsync(string jobId, string technicianId, DateTime startedAt);
-<<<<<<< Updated upstream
-=======
 
     /// <summary>Persists a service work record for an active job.</summary>
     Task<ServiceWorkRecord> AddWorkRecordAsync(ServiceWorkRecord record);
@@ -57,7 +55,7 @@ public interface IJobRepository
     /// <summary>Retrieves all service work records for a job ordered by recorded_at.</summary>
     Task<IReadOnlyList<ServiceWorkRecord>> GetWorkRecordsByJobIdAsync(string jobId);
 
-    /// <summary>Updates the content of an existing work record.</summary>
+    /// <summary>Updates the content of a work record belonging to the specified job.</summary>
     Task<bool> UpdateWorkRecordAsync(string recordId, string jobId, string content);
->>>>>>> Stashed changes
 }
+

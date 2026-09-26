@@ -31,6 +31,10 @@ public class JobServiceTests
         FakeEventPublisher eventPublisher) =>
         new(repository, validationClient, eventPublisher, NullLogger<Services.JobService>.Instance);
 
+    private static Services.JobService BuildService(FakeJobRepository repository) =>
+        BuildService(repository, new FakeAssetValidationClient(), new FakeEventPublisher());
+
+
     [Fact]
     public async Task CreateAsync_WithValidRequest_CreatesJob()
     {
@@ -643,8 +647,6 @@ public class JobServiceTests
         // Publishing was attempted, not skipped.
         Assert.Equal(1, publisher.PublishAsyncCallCount);
     }
-<<<<<<< Updated upstream
-=======
 
     // =========================================================================
     // US-11A: Add Service Work Record Tests
@@ -834,17 +836,7 @@ public class JobServiceTests
     [Fact]
     public async Task UpdateWorkRecordAsync_ByActiveAssigneeOnInProgressJob_SucceedsAndPersists()
     {
-        // Arrange
-        var repository = new FakeJobRepository
-        {
-            JobToReturn = new Job
-            {
-                Id = AssignedJobId,
-                Status = "IN_PROGRESS",
-                AssignedTechnicianId = ActiveTechnicianId
-            }
-        };
-
+        var repository = new FakeJobRepository { JobToReturn = InProgressJob(DateTime.UtcNow) };
         var recordId = Guid.NewGuid().ToString();
         repository.StoredWorkRecords.Add(new ServiceWorkRecord
         {
@@ -852,42 +844,23 @@ public class JobServiceTests
             JobId = AssignedJobId,
             Content = "Old content"
         });
-
         var service = BuildService(repository);
-        var content = "Updated work notes.";
 
-        // Act
-        var result = await service.UpdateWorkRecordAsync(AssignedJobId, recordId, ActiveTechnicianId, content);
+        var result = await service.UpdateWorkRecordAsync(AssignedJobId, recordId, ActiveTechnicianId, "Updated work notes.");
 
-        // Assert
         Assert.True(result.IsSuccess);
-        Assert.NotNull(result.Value);
-        Assert.Equal(content, result.Value.Content);
-        
-        var updatedRecord = repository.StoredWorkRecords.Single();
-        Assert.Equal(content, updatedRecord.Content);
+        Assert.Equal("Updated work notes.", result.Value!.Content);
+        Assert.Equal("Updated work notes.", Assert.Single(repository.StoredWorkRecords).Content);
     }
 
     [Fact]
     public async Task UpdateWorkRecordAsync_WhenRecordDoesNotExist_ReturnsWorkRecordNotFound()
     {
-        // Arrange
-        var repository = new FakeJobRepository
-        {
-            JobToReturn = new Job
-            {
-                Id = AssignedJobId,
-                Status = "IN_PROGRESS",
-                AssignedTechnicianId = ActiveTechnicianId
-            }
-        };
-
+        var repository = new FakeJobRepository { JobToReturn = InProgressJob(DateTime.UtcNow) };
         var service = BuildService(repository);
 
-        // Act
         var result = await service.UpdateWorkRecordAsync(AssignedJobId, "missing-record", ActiveTechnicianId, "New content");
 
-        // Assert
         Assert.False(result.IsSuccess);
         Assert.Equal(ServiceError.WorkRecordNotFound, result.Error);
     }
@@ -895,34 +868,13 @@ public class JobServiceTests
     [Fact]
     public async Task UpdateWorkRecordAsync_ByNonAssignee_ReturnsNotTheAssignee()
     {
-        // Arrange
-        var repository = new FakeJobRepository
-        {
-            JobToReturn = new Job
-            {
-                Id = AssignedJobId,
-                Status = "IN_PROGRESS",
-                AssignedTechnicianId = ActiveTechnicianId
-            }
-        };
-
-        var recordId = Guid.NewGuid().ToString();
-        repository.StoredWorkRecords.Add(new ServiceWorkRecord
-        {
-            Id = recordId,
-            JobId = AssignedJobId,
-            Content = "Old content"
-        });
-
+        var repository = new FakeJobRepository { JobToReturn = InProgressJob(DateTime.UtcNow) };
         var service = BuildService(repository);
-        var otherTechnicianId = Guid.NewGuid().ToString();
 
-        // Act
-        var result = await service.UpdateWorkRecordAsync(AssignedJobId, recordId, otherTechnicianId, "New content");
+        var result = await service.UpdateWorkRecordAsync(AssignedJobId, Guid.NewGuid().ToString(), "different-technician", "New content");
 
-        // Assert
         Assert.False(result.IsSuccess);
         Assert.Equal(ServiceError.NotTheAssignee, result.Error);
     }
->>>>>>> Stashed changes
 }
+

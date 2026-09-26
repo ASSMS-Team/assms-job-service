@@ -18,9 +18,6 @@ public enum ServiceError
     // transition, e.g. trying to start a CREATED or already IN_PROGRESS job.
     NotAssigned = 6,
     // The caller supplied a technician id that does not match the active assignee.
-<<<<<<< Updated upstream
-    NotTheAssignee = 7
-=======
     NotTheAssignee = 7,
 
     // AddWorkRecordAsync failures.
@@ -30,7 +27,6 @@ public enum ServiceError
     MissingContent = 9,
     // The requested work record does not exist or belongs to another job.
     WorkRecordNotFound = 10
->>>>>>> Stashed changes
 }
 
 // Expected failures are returned, not thrown, so the controller's branching is

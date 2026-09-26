@@ -272,8 +272,6 @@ public class JobRepository : IJobRepository
             UpdatedAt = reader.GetDateTime(updatedAtOrdinal)
         };
     }
-<<<<<<< Updated upstream
-=======
 
     public async Task<ServiceWorkRecord> AddWorkRecordAsync(ServiceWorkRecord record)
     {
@@ -373,8 +371,27 @@ public class JobRepository : IJobRepository
         command.Parameters.AddWithValue("@jobId", jobId);
         command.Parameters.AddWithValue("@content", content);
 
-        var rowsAffected = await command.ExecuteNonQueryAsync();
-        return rowsAffected > 0;
+        var changedRows = await command.ExecuteNonQueryAsync();
+        if (changedRows > 0)
+        {
+            return true;
+        }
+
+        // MySQL reports zero affected rows when the supplied content is already
+        // stored. Treat that idempotent PUT as success, and distinguish it from
+        // a record that does not exist on this job.
+        await using var existsCommand = connection.CreateCommand();
+        existsCommand.CommandText = @"
+            SELECT EXISTS (
+                SELECT 1
+                FROM service_work_records
+                WHERE id = @recordId AND job_id = @jobId
+            );";
+        existsCommand.Parameters.AddWithValue("@recordId", recordId);
+        existsCommand.Parameters.AddWithValue("@jobId", jobId);
+
+        var exists = await existsCommand.ExecuteScalarAsync();
+        return Convert.ToInt32(exists) == 1;
     }
->>>>>>> Stashed changes
 }
+
