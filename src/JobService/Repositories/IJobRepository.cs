@@ -54,5 +54,8 @@ public interface IJobRepository
 
     /// <summary>Retrieves all service work records for a job ordered by recorded_at.</summary>
     Task<IReadOnlyList<ServiceWorkRecord>> GetWorkRecordsByJobIdAsync(string jobId);
+
+    /// <summary>Updates the content of a work record belonging to the specified job.</summary>
+    Task<bool> UpdateWorkRecordAsync(string recordId, string jobId, string content);
 }
 

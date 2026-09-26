@@ -211,6 +211,50 @@ public class JobService
         return records.Select(MapToWorkRecordResponse).ToList();
     }
 
+    /// <summary>Updates a work record belonging to the active assignee's in-progress job.</summary>
+    public async Task<Result<ServiceWorkRecordResponse>> UpdateWorkRecordAsync(
+        string jobId,
+        string recordId,
+        string callerTechnicianId,
+        string content)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            return Result<ServiceWorkRecordResponse>.Failure(ServiceError.MissingContent);
+        }
+
+        var job = await _repository.GetByIdAsync(jobId);
+        if (job is null)
+        {
+            return Result<ServiceWorkRecordResponse>.Failure(ServiceError.JobNotFound);
+        }
+
+        if (job.Status != InProgressStatus)
+        {
+            return Result<ServiceWorkRecordResponse>.Failure(ServiceError.JobNotInProgress);
+        }
+
+        if (!string.Equals(job.AssignedTechnicianId, callerTechnicianId, StringComparison.OrdinalIgnoreCase))
+        {
+            return Result<ServiceWorkRecordResponse>.Failure(ServiceError.NotTheAssignee);
+        }
+
+        var updated = await _repository.UpdateWorkRecordAsync(recordId, jobId, content.Trim());
+        if (!updated)
+        {
+            return Result<ServiceWorkRecordResponse>.Failure(ServiceError.WorkRecordNotFound);
+        }
+
+        var records = await _repository.GetWorkRecordsByJobIdAsync(jobId);
+        var record = records.FirstOrDefault(item => item.Id == recordId);
+        if (record is null)
+        {
+            return Result<ServiceWorkRecordResponse>.Failure(ServiceError.WorkRecordNotFound);
+        }
+
+        return Result<ServiceWorkRecordResponse>.Success(MapToWorkRecordResponse(record));
+    }
+
 
     // Generates a reference and inserts, treating a duplicate-key failure as a
     // reason to draw a new reference rather than as an error. The unique index

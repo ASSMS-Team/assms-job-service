@@ -24,7 +24,9 @@ public enum ServiceError
     // The job exists and the technician is assigned, but the job is not in IN_PROGRESS status.
     JobNotInProgress = 8,
     // Work record content was empty or whitespace.
-    MissingContent = 9
+    MissingContent = 9,
+    // The requested work record does not exist or belongs to another job.
+    WorkRecordNotFound = 10
 }
 
 // Expected failures are returned, not thrown, so the controller's branching is

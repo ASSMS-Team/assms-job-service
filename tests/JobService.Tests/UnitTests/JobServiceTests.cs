@@ -832,5 +832,49 @@ public class JobServiceTests
         // Assert
         Assert.Null(records);
     }
+
+    [Fact]
+    public async Task UpdateWorkRecordAsync_ByActiveAssigneeOnInProgressJob_SucceedsAndPersists()
+    {
+        var repository = new FakeJobRepository { JobToReturn = InProgressJob(DateTime.UtcNow) };
+        var recordId = Guid.NewGuid().ToString();
+        repository.StoredWorkRecords.Add(new ServiceWorkRecord
+        {
+            Id = recordId,
+            JobId = AssignedJobId,
+            Content = "Old content"
+        });
+        var service = BuildService(repository);
+
+        var result = await service.UpdateWorkRecordAsync(AssignedJobId, recordId, ActiveTechnicianId, "Updated work notes.");
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal("Updated work notes.", result.Value!.Content);
+        Assert.Equal("Updated work notes.", Assert.Single(repository.StoredWorkRecords).Content);
+    }
+
+    [Fact]
+    public async Task UpdateWorkRecordAsync_WhenRecordDoesNotExist_ReturnsWorkRecordNotFound()
+    {
+        var repository = new FakeJobRepository { JobToReturn = InProgressJob(DateTime.UtcNow) };
+        var service = BuildService(repository);
+
+        var result = await service.UpdateWorkRecordAsync(AssignedJobId, "missing-record", ActiveTechnicianId, "New content");
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ServiceError.WorkRecordNotFound, result.Error);
+    }
+
+    [Fact]
+    public async Task UpdateWorkRecordAsync_ByNonAssignee_ReturnsNotTheAssignee()
+    {
+        var repository = new FakeJobRepository { JobToReturn = InProgressJob(DateTime.UtcNow) };
+        var service = BuildService(repository);
+
+        var result = await service.UpdateWorkRecordAsync(AssignedJobId, Guid.NewGuid().ToString(), "different-technician", "New content");
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ServiceError.NotTheAssignee, result.Error);
+    }
 }
 

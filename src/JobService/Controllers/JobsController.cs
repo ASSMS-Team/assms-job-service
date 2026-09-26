@@ -367,6 +367,83 @@ public class JobsController : ControllerBase
         return Ok(records);
     }
 
+    /// <summary>
+    /// Updates a work record on an in-progress job. Only the active assignee may update it.
+    /// </summary>
+    [HttpPut("{id}/work-records/{recordId}")]
+    [ProducesResponseType(typeof(ServiceWorkRecordResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> UpdateWorkRecord(string id, string recordId, [FromBody] UpdateWorkRecordRequest request)
+    {
+        if (!Guid.TryParse(request.TechnicianId, out _))
+        {
+            return BadRequest(new ValidationProblemDetails(
+                new Dictionary<string, string[]>
+                {
+                    ["technicianId"] = new[] { "TechnicianId must be a valid GUID." }
+                })
+            {
+                Status = StatusCodes.Status400BadRequest
+            });
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Content))
+        {
+            return BadRequest(new ValidationProblemDetails(
+                new Dictionary<string, string[]>
+                {
+                    ["content"] = new[] { "Work record content is required." }
+                })
+            {
+                Status = StatusCodes.Status400BadRequest
+            });
+        }
+
+        var result = await _jobService.UpdateWorkRecordAsync(id, recordId, request.TechnicianId, request.Content);
+
+        if (result.Error is ServiceError.JobNotFound or ServiceError.WorkRecordNotFound)
+        {
+            return NotFound();
+        }
+
+        if (result.Error == ServiceError.NotTheAssignee)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new ProblemDetails
+            {
+                Title = "Forbidden.",
+                Detail = "The supplied technician id is not the active assignee of this job.",
+                Status = StatusCodes.Status403Forbidden
+            });
+        }
+
+        if (result.Error == ServiceError.JobNotInProgress)
+        {
+            return Conflict(new ProblemDetails
+            {
+                Title = "Job is not in progress.",
+                Detail = "Work records can only be updated on a job in status IN_PROGRESS.",
+                Status = StatusCodes.Status409Conflict
+            });
+        }
+
+        if (result.Error == ServiceError.MissingContent)
+        {
+            return BadRequest(new ValidationProblemDetails(
+                new Dictionary<string, string[]>
+                {
+                    ["content"] = new[] { "Work record content is required." }
+                })
+            {
+                Status = StatusCodes.Status400BadRequest
+            });
+        }
+
+        return Ok(result.Value);
+    }
+
     private static ValidationProblemDetails InvalidFilter(string field, string message) =>
         new(new Dictionary<string, string[]> { [field] = new[] { message } })
         {

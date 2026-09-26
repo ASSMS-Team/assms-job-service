@@ -169,6 +169,18 @@ public class FakeJobRepository : IJobRepository
             .ToList();
         return Task.FromResult(list);
     }
+
+    public Task<bool> UpdateWorkRecordAsync(string recordId, string jobId, string content)
+    {
+        var record = StoredWorkRecords.FirstOrDefault(item => item.Id == recordId && item.JobId == jobId);
+        if (record is null)
+        {
+            return Task.FromResult(false);
+        }
+
+        record.Content = content;
+        return Task.FromResult(true);
+    }
 }
 
 // One recorded AppliedAssignment call. A record rather than the Job model:
