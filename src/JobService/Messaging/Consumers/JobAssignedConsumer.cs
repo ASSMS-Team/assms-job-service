@@ -262,6 +262,20 @@ public class JobAssignedConsumer : BackgroundService
                 payload.TechnicianId,
                 payload.AssignmentId);
 
+            var job = await repository.GetByIdAsync(payload.JobId);
+            if (job is not null)
+            {
+                await repository.AddStatusHistoryAsync(new JobService.Models.JobStatusHistory
+                {
+                    Id = Guid.NewGuid().ToString(),
+                    JobId = job.Id,
+                    PreviousStatus = "CREATED", // Assumption based on normal lifecycle
+                    NewStatus = JobAssignedPayload.AssignedStatus,
+                    ActorId = "00000000-0000-0000-0000-000000000000",
+                    CreatedAt = job.UpdatedAt
+                });
+            }
+
             return;
         }
 

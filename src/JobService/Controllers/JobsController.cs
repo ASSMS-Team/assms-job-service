@@ -173,6 +173,28 @@ public class JobsController : ControllerBase
     }
 
     /// <summary>
+    /// Returns the status history of a job.
+    /// </summary>
+    /// <param name="id">The server-generated job id.</param>
+    /// <response code="200">The status history of the job.</response>
+    /// <response code="404">No job exists with this id.</response>
+    [HttpGet("{id}/history")]
+    [Authorize(Roles = StaffRoles.JobViewers)]
+    [ProducesResponseType(typeof(IReadOnlyList<JobStatusHistoryResponse>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetStatusHistory(string id)
+    {
+        var history = await _jobService.GetStatusHistoryAsync(id);
+
+        if (history is null)
+        {
+            return NotFound();
+        }
+
+        return Ok(history);
+    }
+
+    /// <summary>
     /// Returns a single job by its human-readable reference - the JOB- handle an
     /// Agent has to hand when a customer calls about existing work.
     /// </summary>

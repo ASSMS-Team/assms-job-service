@@ -393,5 +393,67 @@ public class JobRepository : IJobRepository
         var exists = await existsCommand.ExecuteScalarAsync();
         return Convert.ToInt32(exists) == 1;
     }
+
+    public async Task AddStatusHistoryAsync(JobStatusHistory history)
+    {
+        await using var connection = _connectionFactory.CreateConnection();
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            INSERT INTO job_status_history
+            (id, job_id, previous_status, new_status, actor_id, created_at)
+            VALUES
+            (@id, @jobId, @previousStatus, @newStatus, @actorId, @createdAt);";
+
+        command.Parameters.AddWithValue("@id", history.Id);
+        command.Parameters.AddWithValue("@jobId", history.JobId);
+        command.Parameters.AddWithValue("@previousStatus", (object?)history.PreviousStatus ?? DBNull.Value);
+        command.Parameters.AddWithValue("@newStatus", history.NewStatus);
+        command.Parameters.AddWithValue("@actorId", history.ActorId);
+        command.Parameters.AddWithValue("@createdAt", history.CreatedAt);
+
+        await command.ExecuteNonQueryAsync();
+    }
+
+    public async Task<IReadOnlyList<JobStatusHistory>> GetStatusHistoryAsync(string jobId)
+    {
+        await using var connection = _connectionFactory.CreateConnection();
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            SELECT id, job_id, previous_status, new_status, actor_id, created_at
+            FROM job_status_history
+            WHERE job_id = @jobId
+            ORDER BY created_at ASC;";
+
+        command.Parameters.AddWithValue("@jobId", jobId);
+
+        await using var reader = (MySqlConnector.MySqlDataReader)await command.ExecuteReaderAsync();
+        var history = new List<JobStatusHistory>();
+
+        while (await reader.ReadAsync())
+        {
+            var idOrdinal = reader.GetOrdinal("id");
+            var jobIdOrdinal = reader.GetOrdinal("job_id");
+            var previousStatusOrdinal = reader.GetOrdinal("previous_status");
+            var newStatusOrdinal = reader.GetOrdinal("new_status");
+            var actorIdOrdinal = reader.GetOrdinal("actor_id");
+            var createdAtOrdinal = reader.GetOrdinal("created_at");
+
+            history.Add(new JobStatusHistory
+            {
+                Id = reader.GetValue(idOrdinal)?.ToString() ?? string.Empty,
+                JobId = reader.GetValue(jobIdOrdinal)?.ToString() ?? string.Empty,
+                PreviousStatus = reader.IsDBNull(previousStatusOrdinal) ? null : reader.GetString(previousStatusOrdinal),
+                NewStatus = reader.GetString(newStatusOrdinal),
+                ActorId = reader.GetValue(actorIdOrdinal)?.ToString() ?? string.Empty,
+                CreatedAt = reader.GetDateTime(createdAtOrdinal)
+            });
+        }
+
+        return history;
+    }
 }
 

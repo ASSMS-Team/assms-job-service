@@ -57,5 +57,9 @@ public interface IJobRepository
 
     /// <summary>Updates the content of a work record belonging to the specified job.</summary>
     Task<bool> UpdateWorkRecordAsync(string recordId, string jobId, string content);
+
+    Task AddStatusHistoryAsync(JobStatusHistory history);
+
+    Task<IReadOnlyList<JobStatusHistory>> GetStatusHistoryAsync(string jobId);
 }
 
