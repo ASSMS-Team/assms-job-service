@@ -352,6 +352,7 @@ public class JobsController : ControllerBase
     /// <response code="200">The list of service work records for this job.</response>
     /// <response code="404">No job exists with this id.</response>
     [HttpGet("{id}/work-records")]
+    [Authorize(Roles = StaffRoles.JobViewers)]
     [ProducesResponseType(typeof(IReadOnlyList<ServiceWorkRecordResponse>), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetWorkRecords(string id)
