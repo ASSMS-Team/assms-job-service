@@ -50,6 +50,10 @@ public class Job
     // Null until that transition happens.
     public DateTime? StartedAt { get; set; }
 
+    // Written when the active assignee moves the job to COMPLETED (US-11E).
+    // Null until that transition happens.
+    public DateTime? CompletedAt { get; set; }
+
     public DateTime CreatedAt { get; set; }
 
     public DateTime UpdatedAt { get; set; }

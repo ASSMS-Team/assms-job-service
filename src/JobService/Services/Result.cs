@@ -26,7 +26,9 @@ public enum ServiceError
     // Work record content was empty or whitespace.
     MissingContent = 9,
     // The requested work record does not exist or belongs to another job.
-    WorkRecordNotFound = 10
+    WorkRecordNotFound = 10,
+    // CompleteJobAsync failure: at least one service work record must exist before completing a job.
+    WorkRecordsRequired = 11
 }
 
 // Expected failures are returned, not thrown, so the controller's branching is

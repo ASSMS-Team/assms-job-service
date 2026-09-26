@@ -15,7 +15,7 @@ public class JobsController : ControllerBase
 {
     private static readonly HashSet<string> SupportedStatuses = new(StringComparer.Ordinal)
     {
-        "CREATED", "ASSIGNED", "IN_PROGRESS"
+        "CREATED", "ASSIGNED", "IN_PROGRESS", "COMPLETED"
     };
     // Qualified: the class shares its name with the root namespace, so the bare
     // name would bind to the namespace and not compile.
@@ -276,6 +276,83 @@ public class JobsController : ControllerBase
                 Title = "Invalid lifecycle transition.",
                 Detail = "Only a job in status ASSIGNED can be started. The job is currently in a different status.",
                 Status = StatusCodes.Status409Conflict
+            });
+        }
+
+        return Ok(result.Value);
+    }
+
+    /// <summary>
+    /// Completes an in-progress job on behalf of its active technician. The job must
+    /// be in status IN_PROGRESS, caller must be the active assignee, and required work
+    /// records must exist. On success the job moves to COMPLETED and a JobStatusChanged
+    /// event is published.
+    /// </summary>
+    /// <param name="id">The server-generated job id (a GUID string).</param>
+    /// <param name="request">The technician id asserting they are completing the job.</param>
+    /// <response code="200">The job has been moved to COMPLETED. The response body is the updated job.</response>
+    /// <response code="400">TechnicianId was missing/invalid or work records are required.</response>
+    /// <response code="403">The caller is not the active assignee of this job.</response>
+    /// <response code="404">No job exists with this id.</response>
+    /// <response code="409">The job is not in status IN_PROGRESS.</response>
+    [HttpPost("{id}/complete")]
+    [ProducesResponseType(typeof(JobResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> Complete(string id, [FromBody] CompleteJobRequest request)
+    {
+        if (!Guid.TryParse(request.TechnicianId, out _))
+        {
+            return BadRequest(new ValidationProblemDetails(
+                new Dictionary<string, string[]>
+                {
+                    ["technicianId"] = new[] { "TechnicianId must be a valid GUID." }
+                })
+            {
+                Status = StatusCodes.Status400BadRequest
+            });
+        }
+
+        var result = await _jobService.CompleteJobAsync(id, request.TechnicianId);
+
+        if (result.Error == ServiceError.JobNotFound)
+        {
+            return NotFound();
+        }
+
+        if (result.Error == ServiceError.NotTheAssignee)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new ProblemDetails
+            {
+                Title = "Forbidden.",
+                Detail = "The supplied technician id is not the active assignee of this job.",
+                Status = StatusCodes.Status403Forbidden
+            });
+        }
+
+        if (result.Error == ServiceError.JobNotInProgress)
+        {
+            return Conflict(new ProblemDetails
+            {
+                Title = "Job is not in progress.",
+                Detail = "Only a job in status IN_PROGRESS can be completed.",
+                Status = StatusCodes.Status409Conflict
+            });
+        }
+
+        if (result.Error == ServiceError.WorkRecordsRequired)
+        {
+            return BadRequest(new ValidationProblemDetails(
+                new Dictionary<string, string[]>
+                {
+                    ["workRecords"] = new[] { "At least one service work record must be recorded before completing the job." }
+                })
+            {
+                Title = "Work records required.",
+                Detail = "At least one service work record must be recorded before completing the job.",
+                Status = StatusCodes.Status400BadRequest
             });
         }
 

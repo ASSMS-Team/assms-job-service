@@ -49,6 +49,9 @@ public class JobResponse
 
     /// <summary>When the active assignee moved the job to IN_PROGRESS, or null until that transition happens.</summary>
     public DateTime? StartedAt { get; set; }
+
+    /// <summary>When the active assignee moved the job to COMPLETED, or null until that transition happens.</summary>
+    public DateTime? CompletedAt { get; set; }
 }
 
 /// <summary>Assignment facts published by Dispatch and stored locally in jobdb.</summary>

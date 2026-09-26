@@ -148,6 +148,28 @@ public class FakeJobRepository : IJobRepository
         return Task.FromResult(StartJobAsyncResult);
     }
 
+    public bool CompleteJobAsyncResult = true;
+    public string? CompleteJobAsyncCalledWithJobId;
+    public string? CompleteJobAsyncCalledWithTechnicianId;
+    public DateTime? CompleteJobAsyncCalledWithCompletedAt;
+    public int CompleteJobAsyncCallCount;
+
+    public Task<bool> CompleteJobAsync(string jobId, string technicianId, DateTime completedAt)
+    {
+        CompleteJobAsyncCalledWithJobId = jobId;
+        CompleteJobAsyncCalledWithTechnicianId = technicianId;
+        CompleteJobAsyncCalledWithCompletedAt = completedAt;
+        CompleteJobAsyncCallCount++;
+
+        if (CompleteJobAsyncResult && JobToReturn is not null)
+        {
+            JobToReturn.Status = "COMPLETED";
+            JobToReturn.CompletedAt = completedAt;
+        }
+
+        return Task.FromResult(CompleteJobAsyncResult);
+    }
+
 
     // AddWorkRecordAsync & GetWorkRecordsByJobIdAsync
     public readonly List<ServiceWorkRecord> StoredWorkRecords = new();

@@ -453,6 +453,23 @@ public class JobServiceTests
         UpdatedAt = startedAt
     };
 
+    private static Job CompletedJob(DateTime startedAt, DateTime completedAt) => new()
+    {
+        Id = AssignedJobId,
+        JobReference = "JOB-START1",
+        CustomerId = CustomerId,
+        AssetId = AssetId,
+        Status = "COMPLETED",
+        AssignmentId = AssignmentId,
+        AssignedTechnicianId = ActiveTechnicianId,
+        AssignedTechnicianReference = "TEC-099",
+        AssignedAt = new DateTime(2026, 9, 20, 8, 0, 0, DateTimeKind.Utc),
+        StartedAt = startedAt,
+        CompletedAt = completedAt,
+        CreatedAt = new DateTime(2026, 9, 19, 7, 0, 0, DateTimeKind.Utc),
+        UpdatedAt = completedAt
+    };
+
     // AC1: The active assignee can move an ASSIGNED job to IN_PROGRESS.
     [Fact]
     public async Task StartJobAsync_ActiveAssignee_TransitionsJobToInProgress()
@@ -952,6 +969,109 @@ public class JobServiceTests
         var service = BuildService(repository);
 
         var result = await service.DeleteWorkRecordAsync(AssignedJobId, Guid.NewGuid().ToString(), "unauthorized-technician");
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ServiceError.NotTheAssignee, result.Error);
+    }
+
+    // =========================================================================
+    // US-11E: Complete In-Progress Job Tests
+    // =========================================================================
+
+    [Fact]
+    public async Task CompleteJobAsync_ActiveAssigneeWithWorkRecords_TransitionsToCompletedAndPublishesEvent()
+    {
+        var startedAt = new DateTime(2026, 9, 22, 6, 0, 0, DateTimeKind.Utc);
+        var completedAt = new DateTime(2026, 9, 22, 8, 0, 0, DateTimeKind.Utc);
+
+        var repository = new FakeJobRepository
+        {
+            CompleteJobAsyncResult = true,
+            JobToReturn = InProgressJob(startedAt)
+        };
+        repository.StoredWorkRecords.Add(new ServiceWorkRecord
+        {
+            Id = Guid.NewGuid().ToString(),
+            JobId = AssignedJobId,
+            JobReference = "JOB-START1",
+            TechnicianId = ActiveTechnicianId,
+            TechnicianReference = "TEC-099",
+            Content = "Completed the repairs successfully.",
+            RecordedAt = startedAt,
+            CreatedAt = startedAt
+        });
+
+        var publisher = new FakeEventPublisher();
+        var service = BuildService(repository, new FakeAssetValidationClient(), publisher);
+
+        var result = await service.CompleteJobAsync(AssignedJobId, ActiveTechnicianId);
+
+        Assert.True(result.IsSuccess);
+        Assert.NotNull(result.Value);
+        Assert.Equal("COMPLETED", result.Value.Status);
+        Assert.NotNull(result.Value.CompletedAt);
+
+        // Verify status history was recorded
+        Assert.Contains(repository.StoredStatusHistories, h =>
+            h.JobId == AssignedJobId &&
+            h.PreviousStatus == "IN_PROGRESS" &&
+            h.NewStatus == "COMPLETED" &&
+            h.ActorId == ActiveTechnicianId);
+
+        // Verify event was published
+        Assert.Equal(1, publisher.PublishAsyncCallCount);
+    }
+
+    [Fact]
+    public async Task CompleteJobAsync_WhenNoWorkRecordsExist_ReturnsWorkRecordsRequired()
+    {
+        var startedAt = new DateTime(2026, 9, 22, 6, 0, 0, DateTimeKind.Utc);
+        var repository = new FakeJobRepository
+        {
+            JobToReturn = InProgressJob(startedAt)
+        };
+        // StoredWorkRecords is empty!
+        var service = BuildService(repository);
+
+        var result = await service.CompleteJobAsync(AssignedJobId, ActiveTechnicianId);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ServiceError.WorkRecordsRequired, result.Error);
+        Assert.Equal(0, repository.CompleteJobAsyncCallCount);
+    }
+
+    [Fact]
+    public async Task CompleteJobAsync_WhenJobDoesNotExist_ReturnsJobNotFound()
+    {
+        var repository = new FakeJobRepository { JobToReturn = null };
+        var service = BuildService(repository);
+
+        var result = await service.CompleteJobAsync("missing-job", ActiveTechnicianId);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ServiceError.JobNotFound, result.Error);
+    }
+
+    [Fact]
+    public async Task CompleteJobAsync_WhenJobNotInProgress_ReturnsJobNotInProgress()
+    {
+        var repository = new FakeJobRepository { JobToReturn = AssignedJob() };
+        var service = BuildService(repository);
+
+        var result = await service.CompleteJobAsync(AssignedJobId, ActiveTechnicianId);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ServiceError.JobNotInProgress, result.Error);
+    }
+
+    [Fact]
+    public async Task CompleteJobAsync_ByNonAssignee_ReturnsNotTheAssignee()
+    {
+        var startedAt = new DateTime(2026, 9, 22, 6, 0, 0, DateTimeKind.Utc);
+        var repository = new FakeJobRepository { JobToReturn = InProgressJob(startedAt) };
+        var service = BuildService(repository);
+
+        var result = await service.CompleteJobAsync(AssignedJobId, "different-technician");
 
         Assert.False(result.IsSuccess);
         Assert.Equal(ServiceError.NotTheAssignee, result.Error);

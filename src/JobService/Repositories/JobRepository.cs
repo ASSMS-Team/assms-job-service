@@ -13,7 +13,7 @@ public class JobRepository : IJobRepository
                    problem_description, priority, region, scheduled_date,
                    created_by, status, assignment_id, assigned_technician_id,
                    assigned_technician_reference, assigned_at, started_at,
-                   created_at, updated_at
+                   completed_at, created_at, updated_at
             FROM jobs";
 
     private readonly IDbConnectionFactory _connectionFactory;
@@ -148,6 +148,30 @@ public class JobRepository : IJobRepository
         return rowsAffected > 0;
     }
 
+    public async Task<bool> CompleteJobAsync(string jobId, string technicianId, DateTime completedAt)
+    {
+        await using var connection = _connectionFactory.CreateConnection();
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            UPDATE jobs
+            SET    status       = 'COMPLETED',
+                   completed_at = @completedAt
+            WHERE  id                     = @jobId
+              AND  status                 = 'IN_PROGRESS'
+              AND  assigned_technician_id = @technicianId;";
+
+        command.Parameters.AddWithValue("@jobId", jobId);
+        command.Parameters.AddWithValue("@technicianId", technicianId);
+        command.Parameters.AddWithValue("@completedAt", completedAt);
+
+        var rowsAffected = await command.ExecuteNonQueryAsync();
+
+        return rowsAffected > 0;
+    }
+
+
     public async Task<Job?> GetByIdAsync(string id)
     {
         await using var connection = _connectionFactory.CreateConnection();
@@ -240,6 +264,8 @@ public class JobRepository : IJobRepository
         var assignedTechnicianReferenceOrdinal = reader.GetOrdinal("assigned_technician_reference");
         var assignedAtOrdinal = reader.GetOrdinal("assigned_at");
         var startedAtOrdinal = reader.GetOrdinal("started_at");
+        var completedAtOrdinal = -1;
+        try { completedAtOrdinal = reader.GetOrdinal("completed_at"); } catch { }
         var createdAtOrdinal = reader.GetOrdinal("created_at");
         var updatedAtOrdinal = reader.GetOrdinal("updated_at");
 
@@ -268,6 +294,7 @@ public class JobRepository : IJobRepository
             AssignedTechnicianReference = reader.IsDBNull(assignedTechnicianReferenceOrdinal) ? null : reader.GetString(assignedTechnicianReferenceOrdinal),
             AssignedAt = reader.IsDBNull(assignedAtOrdinal) ? null : reader.GetDateTime(assignedAtOrdinal),
             StartedAt = reader.IsDBNull(startedAtOrdinal) ? null : reader.GetDateTime(startedAtOrdinal),
+            CompletedAt = completedAtOrdinal >= 0 && !reader.IsDBNull(completedAtOrdinal) ? reader.GetDateTime(completedAtOrdinal) : null,
             CreatedAt = reader.GetDateTime(createdAtOrdinal),
             UpdatedAt = reader.GetDateTime(updatedAtOrdinal)
         };
