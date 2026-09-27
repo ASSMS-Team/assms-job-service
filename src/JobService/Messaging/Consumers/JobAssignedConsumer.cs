@@ -4,20 +4,16 @@ using Confluent.Kafka;
 
 using JobService.Messaging.Contracts;
 using JobService.Repositories;
+using Prometheus;
 
 namespace JobService.Messaging.Consumers;
 
-/// <summary>Consumes Dispatch JobAssigned events and records assignment context on the job.</summary>
-///
-// This service produces JobCreated and consumes JobAssigned, which closes the
-// loop: it raises the job, Dispatch decides who takes it, and the decision comes
-// back here to be written onto the row an Agent reads.
-//
-// A BackgroundService rather than anything triggered by a request: the assignment
-// happens in Dispatch on its own schedule, and the job has to already show it when
-// someone next looks the job up.
 public class JobAssignedConsumer : BackgroundService
 {
+    private static readonly Counter EventsConsumedCounter = Metrics.CreateCounter(
+        "assms_kafka_events_consumed_total", "Total Kafka events processed by consumer",
+        new CounterConfiguration { LabelNames = new[] { "topic", "consumer_group", "status" } });
+
     // How long to wait before re-reading a message whose write failed. Without it
     // a database that is down turns the retry into a hot loop that reopens a
     // connection thousands of times a second and fills the log with one line.
@@ -180,15 +176,13 @@ public class JobAssignedConsumer : BackgroundService
                     // this message again.
                     consumer.Seek(message.TopicPartitionOffset);
 
+                    EventsConsumedCounter.WithLabels(JobAssignedPayload.Topic, JobAssignedPayload.ConsumerGroup, "failed").Inc();
                     await Task.Delay(WriteRetryDelay, stoppingToken);
                     continue;
                 }
 
-                // Commit last. The row is written and the update is idempotent, so
-                // if the process dies between here and the commit the event is
-                // redelivered and the update declines to change anything - the
-                // same outcome. That is the whole reason the write goes first.
                 consumer.Commit(message);
+                EventsConsumedCounter.WithLabels(JobAssignedPayload.Topic, JobAssignedPayload.ConsumerGroup, "success").Inc();
             }
         }
         catch (OperationCanceledException)
