@@ -3,6 +3,7 @@ using JobService.Extensions;
 using JobService.Messaging.Contracts;
 using JobService.Messaging.Producers;
 using JobService.Models;
+using JobService.Observability;
 using JobService.Repositories;
 
 using MySqlConnector;
@@ -158,6 +159,8 @@ public class JobService
 
         await PublishJobStatusChangedAsync(updated, oldStatus: AssignedStatus);
 
+        JobMetrics.StatusTransitionsTotal.WithLabels(AssignedStatus, InProgressStatus).Inc();
+
         await _repository.AddStatusHistoryAsync(new JobStatusHistory
         {
             Id = Guid.NewGuid().ToString(),
@@ -204,6 +207,9 @@ public class JobService
             $"Job {jobId} was just updated to COMPLETED but could not be read back.");
 
         await PublishJobStatusChangedAsync(updated, oldStatus: InProgressStatus);
+
+        JobMetrics.StatusTransitionsTotal.WithLabels(InProgressStatus, CompletedStatus).Inc();
+        JobMetrics.JobCompletionsTotal.WithLabels(updated.ServiceCategory, updated.Priority).Inc();
 
         await _repository.AddStatusHistoryAsync(new JobStatusHistory
         {
@@ -455,9 +461,13 @@ public class JobService
                 JobStatusChangedPayload.EventVersion,
                 job.Id,
                 payload);
+
+            JobMetrics.StatusEventsPublishedTotal.WithLabels(JobStatusChangedPayload.EventType, "success").Inc();
         }
         catch (Exception ex)
         {
+            JobMetrics.StatusEventsPublishedTotal.WithLabels(JobStatusChangedPayload.EventType, "failed").Inc();
+
             _logger.LogError(
                 ex,
                 "Job {JobId} ({JobReference}) was transitioned to {NewStatus} but the {EventType} event could not be published.",
