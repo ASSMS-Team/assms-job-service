@@ -26,6 +26,31 @@ public class JobsController : ControllerBase
         _jobService = jobService;
     }
 
+    private bool CanReadJob(JobResponse job)
+    {
+        // Role authorization still gates these actions. A Technician must also
+        // own the local JobAssigned projection; never trust a query/body ID.
+        if (User?.IsInRole(StaffRoles.Technician) != true) return true;
+        if (job.Assignment is null) return false;
+        var linkedId = User.FindFirst("technician_id")?.Value;
+        if (linkedId is not null)
+            return Guid.TryParse(linkedId, out var technicianId)
+                && Guid.TryParse(job.Assignment.TechnicianId, out var assignedId)
+                && technicianId == assignedId;
+        // Compatibility for older tokens whose username is the reference.
+        var reference = User.FindFirst("unique_name")?.Value;
+        return !string.IsNullOrWhiteSpace(reference)
+            && string.Equals(reference, job.Assignment.TechnicianReference, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private async Task<IActionResult?> CheckTechnicianAccessAsync(string id)
+    {
+        if (User?.IsInRole(StaffRoles.Technician) != true) return null;
+        var job = await _jobService.GetByIdAsync(id);
+        if (job is null) return NotFound();
+        return CanReadJob(job) ? null : Forbid();
+    }
+
     // [ApiController] returns 400 with ValidationProblemDetails before this runs,
     // so there is no validation code here - only the business rules to branch on.
     /// <summary>
@@ -158,7 +183,7 @@ public class JobsController : ControllerBase
     /// <response code="200">The job with this id.</response>
     /// <response code="404">No job exists with this id.</response>
     [HttpGet("{id}")]
-    [Authorize(Roles = StaffRoles.JobViewers)]
+    [Authorize(Roles = StaffRoles.JobDetailViewers)]
     [ProducesResponseType(typeof(JobResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetById(string id)
@@ -170,6 +195,7 @@ public class JobsController : ControllerBase
             return NotFound();
         }
 
+        if (!CanReadJob(job)) return Forbid();
         return Ok(job);
     }
 
@@ -180,11 +206,13 @@ public class JobsController : ControllerBase
     /// <response code="200">The status history of the job.</response>
     /// <response code="404">No job exists with this id.</response>
     [HttpGet("{id}/history")]
-    [Authorize(Roles = StaffRoles.JobViewers)]
+    [Authorize(Roles = StaffRoles.JobDetailViewers)]
     [ProducesResponseType(typeof(IReadOnlyList<JobStatusHistoryResponse>), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetStatusHistory(string id)
     {
+        var denied = await CheckTechnicianAccessAsync(id);
+        if (denied is not null) return denied;
         var history = await _jobService.GetStatusHistoryAsync(id);
 
         if (history is null)
@@ -452,11 +480,13 @@ public class JobsController : ControllerBase
     /// <response code="200">The list of service work records for this job.</response>
     /// <response code="404">No job exists with this id.</response>
     [HttpGet("{id}/work-records")]
-    [Authorize(Roles = StaffRoles.JobViewers)]
+    [Authorize(Roles = StaffRoles.JobDetailViewers)]
     [ProducesResponseType(typeof(IReadOnlyList<ServiceWorkRecordResponse>), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetWorkRecords(string id)
     {
+        var denied = await CheckTechnicianAccessAsync(id);
+        if (denied is not null) return denied;
         var records = await _jobService.GetWorkRecordsAsync(id);
 
         if (records is null)

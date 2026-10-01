@@ -8,7 +8,6 @@ public class JobAuthorizationTests
 {
     [Theory]
     [InlineData(nameof(JobsController.List))]
-    [InlineData(nameof(JobsController.GetById))]
     [InlineData(nameof(JobsController.GetByReference))]
     public void ReadEndpoints_RequireDispatcherOrManager(string actionName)
     {
@@ -17,6 +16,17 @@ public class JobAuthorizationTests
             .Cast<AuthorizeAttribute>());
 
         Assert.Equal(StaffRoles.JobViewers, authorize.Roles);
+    }
+
+    [Theory]
+    [InlineData(nameof(JobsController.GetById))]
+    [InlineData(nameof(JobsController.GetStatusHistory))]
+    [InlineData(nameof(JobsController.GetWorkRecords))]
+    public void IndividualJobReads_AllowTechnicianRoleWithAssignmentCheck(string actionName)
+    {
+        var action = typeof(JobsController).GetMethod(actionName)!;
+        var authorize = Assert.Single(action.GetCustomAttributes(typeof(AuthorizeAttribute), true).Cast<AuthorizeAttribute>());
+        Assert.Equal(StaffRoles.JobDetailViewers, authorize.Roles);
     }
 
     [Fact]
