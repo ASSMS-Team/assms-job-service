@@ -437,6 +437,11 @@ public class JobService
     // The same fire-and-forget pattern as PublishJobCreatedAsync: the status
     // transition is committed before this runs, so a broker failure must not
     // roll it back or surface as an error to the caller.
+    // jobdb stores UTC, but a value read back without a Kind would otherwise
+    // serialize with no designator and consumers would reject the event.
+    private static DateTime AsUtc(DateTime value) =>
+        value.Kind == DateTimeKind.Unspecified ? DateTime.SpecifyKind(value, DateTimeKind.Utc) : value.ToUniversalTime();
+
     private async Task PublishJobStatusChangedAsync(Job job, string oldStatus)
     {
         try
@@ -451,8 +456,9 @@ public class JobService
                 OldStatus = oldStatus,
                 NewStatus = job.Status,
                 // Use the stored completed_at / started_at rather than a fresh UtcNow so the
-                // event's business time matches what is in the database.
-                OccurredAt = (job.Status == CompletedStatus ? job.CompletedAt : job.StartedAt) ?? DateTime.UtcNow
+                // event's business time matches what is in the database. Consumers require
+                // a UTC timestamp (serialized with Z); jobdb timestamps are UTC.
+                OccurredAt = AsUtc((job.Status == CompletedStatus ? job.CompletedAt : job.StartedAt) ?? DateTime.UtcNow)
             };
 
             await _eventPublisher.PublishAsync(
