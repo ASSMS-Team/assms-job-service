@@ -292,11 +292,11 @@ public class JobRepository : IJobRepository
             AssignmentId = reader.IsDBNull(assignmentIdOrdinal) ? null : reader.GetValue(assignmentIdOrdinal).ToString(),
             AssignedTechnicianId = reader.IsDBNull(assignedTechnicianIdOrdinal) ? null : reader.GetValue(assignedTechnicianIdOrdinal).ToString(),
             AssignedTechnicianReference = reader.IsDBNull(assignedTechnicianReferenceOrdinal) ? null : reader.GetString(assignedTechnicianReferenceOrdinal),
-            AssignedAt = reader.IsDBNull(assignedAtOrdinal) ? null : reader.GetDateTime(assignedAtOrdinal),
-            StartedAt = reader.IsDBNull(startedAtOrdinal) ? null : reader.GetDateTime(startedAtOrdinal),
-            CompletedAt = completedAtOrdinal >= 0 && !reader.IsDBNull(completedAtOrdinal) ? reader.GetDateTime(completedAtOrdinal) : null,
-            CreatedAt = reader.GetDateTime(createdAtOrdinal),
-            UpdatedAt = reader.GetDateTime(updatedAtOrdinal)
+            AssignedAt = reader.IsDBNull(assignedAtOrdinal) ? null : ReadUtc(reader, assignedAtOrdinal),
+            StartedAt = reader.IsDBNull(startedAtOrdinal) ? null : ReadUtc(reader, startedAtOrdinal),
+            CompletedAt = completedAtOrdinal >= 0 && !reader.IsDBNull(completedAtOrdinal) ? ReadUtc(reader, completedAtOrdinal) : null,
+            CreatedAt = ReadUtc(reader, createdAtOrdinal),
+            UpdatedAt = ReadUtc(reader, updatedAtOrdinal)
         };
     }
 
@@ -375,8 +375,8 @@ public class JobRepository : IJobRepository
                 TechnicianId = reader.GetValue(technicianIdOrdinal)?.ToString() ?? string.Empty,
                 TechnicianReference = reader.GetString(technicianReferenceOrdinal),
                 Content = reader.GetString(contentOrdinal),
-                RecordedAt = reader.GetDateTime(recordedAtOrdinal),
-                CreatedAt = reader.GetDateTime(createdAtOrdinal)
+                RecordedAt = ReadUtc(reader, recordedAtOrdinal),
+                CreatedAt = ReadUtc(reader, createdAtOrdinal)
             });
         }
 
@@ -493,11 +493,17 @@ public class JobRepository : IJobRepository
                 PreviousStatus = reader.IsDBNull(previousStatusOrdinal) ? null : reader.GetString(previousStatusOrdinal),
                 NewStatus = reader.GetString(newStatusOrdinal),
                 ActorId = reader.GetValue(actorIdOrdinal)?.ToString() ?? string.Empty,
-                CreatedAt = reader.GetDateTime(createdAtOrdinal)
+                CreatedAt = ReadUtc(reader, createdAtOrdinal)
             });
         }
 
         return history;
     }
-}
 
+    // TIMESTAMP columns are stored in UTC and the service writes UtcNow, but
+    // MySqlConnector returns them as DateTimeKind.Unspecified. Marking them UTC
+    // makes the API and the published events serialize them with a Z, so a
+    // consumer or browser does not read them as local time.
+    private static DateTime ReadUtc(MySqlDataReader reader, int ordinal) =>
+        DateTime.SpecifyKind(reader.GetDateTime(ordinal), DateTimeKind.Utc);
+}

@@ -634,6 +634,24 @@ public class JobServiceTests
         Assert.Equal(startedAt, payload.OccurredAt);
     }
 
+    // MySQL hands timestamps back with DateTimeKind.Unspecified. The event must
+    // still carry them as UTC (serialized with Z), or Reporting discards it.
+    [Fact]
+    public async Task StartJobAsync_PublishesTheDatabaseTimestampAsUtc()
+    {
+        var dbStartedAt = new DateTime(2026, 9, 29, 16, 55, 33, 4, DateTimeKind.Unspecified);
+        var repository = new FakeJobRepository { StartJobAsyncResult = true, JobToReturn = InProgressJob(dbStartedAt) };
+        var publisher = new FakeEventPublisher();
+        var service = BuildService(repository, new FakeAssetValidationClient(), publisher);
+
+        await service.StartJobAsync(AssignedJobId, ActiveTechnicianId);
+
+        var payload = Assert.IsType<JobStatusChangedPayload>(publisher.PublishedPayload);
+        Assert.Equal(DateTimeKind.Utc, payload.OccurredAt.Kind);
+        Assert.Equal(new DateTime(2026, 9, 29, 16, 55, 33, 4, DateTimeKind.Utc), payload.OccurredAt);
+        Assert.Equal("\"2026-09-29T16:55:33.004Z\"", System.Text.Json.JsonSerializer.Serialize(payload.OccurredAt));
+    }
+
     // AC5 (negative): A broker failure must not fail the request. The job is
     // already committed when the publish runs, so a failed publish is logged
     // and swallowed, matching the same guarantee on job creation.
