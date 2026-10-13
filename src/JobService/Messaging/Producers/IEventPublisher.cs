@@ -10,4 +10,7 @@ public interface IEventPublisher
     // eventVersion is a parameter rather than a constant on the publisher
     // because each event type versions its own payload independently.
     Task PublishAsync(string topic, string eventType, int eventVersion, string key, object payload);
+
+    /// <summary>Publishes an already-serialized event payload JSON string to Kafka, keyed by key.</summary>
+    Task PublishRawAsync(string topic, string key, string payloadJson, CancellationToken cancellationToken = default);
 }

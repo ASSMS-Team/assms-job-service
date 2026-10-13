@@ -122,6 +122,9 @@ builder.Services.AddHostedService(serviceProvider =>
         serviceProvider.GetRequiredService<IServiceScopeFactory>(),
         serviceProvider.GetRequiredService<ILogger<JobAssignedConsumer>>()));
 
+// US-10A / S4-KAFKA-01: Durably publishes and retries status outbox events to Kafka across broker outages.
+builder.Services.AddHostedService<JobStatusOutboxPublisher>();
+
 builder.Services.AddControllers()
     .AddJsonOptions(options =>
     {

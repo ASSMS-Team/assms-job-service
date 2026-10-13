@@ -500,6 +500,125 @@ public class JobRepository : IJobRepository
         return history;
     }
 
+    public async Task InsertJobStatusOutboxAsync(JobStatusOutboxRecord record, CancellationToken cancellationToken = default)
+    {
+        await using var connection = _connectionFactory.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            INSERT INTO job_status_outbox (
+                id,
+                job_id,
+                event_type,
+                topic,
+                payload,
+                publish_attempts,
+                created_at
+            ) VALUES (
+                @id,
+                @jobId,
+                @eventType,
+                @topic,
+                CAST(@payload AS JSON),
+                @publishAttempts,
+                @createdAt
+            );";
+
+        command.Parameters.AddWithValue("@id", record.Id);
+        command.Parameters.AddWithValue("@jobId", record.JobId);
+        command.Parameters.AddWithValue("@eventType", record.EventType);
+        command.Parameters.AddWithValue("@topic", record.Topic);
+        command.Parameters.AddWithValue("@payload", record.Payload);
+        command.Parameters.AddWithValue("@publishAttempts", record.PublishAttempts);
+        command.Parameters.AddWithValue("@createdAt", record.CreatedAt ?? DateTime.UtcNow);
+
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<JobStatusOutboxRecord>> GetPendingJobStatusOutboxEventsAsync(int limit, CancellationToken cancellationToken = default)
+    {
+        await using var connection = _connectionFactory.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            SELECT id, job_id, event_type, topic, payload, publish_attempts, last_error, created_at, published_at
+            FROM job_status_outbox
+            WHERE published_at IS NULL
+            ORDER BY created_at ASC, id ASC
+            LIMIT @limit;";
+
+        command.Parameters.AddWithValue("@limit", Math.Clamp(limit, 1, 100));
+
+        var results = new List<JobStatusOutboxRecord>();
+        await using var reader = (MySqlDataReader)await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var idOrdinal = reader.GetOrdinal("id");
+            var jobIdOrdinal = reader.GetOrdinal("job_id");
+            var eventTypeOrdinal = reader.GetOrdinal("event_type");
+            var topicOrdinal = reader.GetOrdinal("topic");
+            var payloadOrdinal = reader.GetOrdinal("payload");
+            var publishAttemptsOrdinal = reader.GetOrdinal("publish_attempts");
+            var lastErrorOrdinal = reader.GetOrdinal("last_error");
+            var createdAtOrdinal = reader.GetOrdinal("created_at");
+            var publishedAtOrdinal = reader.GetOrdinal("published_at");
+
+            results.Add(new JobStatusOutboxRecord
+            {
+                Id = reader.GetValue(idOrdinal)?.ToString() ?? string.Empty,
+                JobId = reader.GetValue(jobIdOrdinal)?.ToString() ?? string.Empty,
+                EventType = reader.GetString(eventTypeOrdinal),
+                Topic = reader.GetString(topicOrdinal),
+                Payload = reader.GetString(payloadOrdinal),
+                PublishAttempts = reader.GetInt32(publishAttemptsOrdinal),
+                LastError = reader.IsDBNull(lastErrorOrdinal) ? null : reader.GetString(lastErrorOrdinal),
+                CreatedAt = ReadUtc(reader, createdAtOrdinal),
+                PublishedAt = reader.IsDBNull(publishedAtOrdinal) ? null : ReadUtc(reader, publishedAtOrdinal)
+            });
+        }
+
+        return results;
+    }
+
+    public async Task MarkJobStatusOutboxPublishedAsync(string id, DateTime publishedAt, CancellationToken cancellationToken = default)
+    {
+        await using var connection = _connectionFactory.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            UPDATE job_status_outbox
+            SET published_at = @publishedAt,
+                publish_attempts = publish_attempts + 1,
+                last_error = NULL
+            WHERE id = @id AND published_at IS NULL;";
+
+        command.Parameters.AddWithValue("@id", id);
+        command.Parameters.AddWithValue("@publishedAt", publishedAt.Kind == DateTimeKind.Utc ? publishedAt : publishedAt.ToUniversalTime());
+
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task MarkJobStatusOutboxFailedAsync(string id, string error, CancellationToken cancellationToken = default)
+    {
+        await using var connection = _connectionFactory.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            UPDATE job_status_outbox
+            SET publish_attempts = publish_attempts + 1,
+                last_error = @error
+            WHERE id = @id AND published_at IS NULL;";
+
+        command.Parameters.AddWithValue("@id", id);
+        command.Parameters.AddWithValue("@error", error.Length > 1000 ? error[..1000] : error);
+
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
     // TIMESTAMP columns are stored in UTC and the service writes UtcNow, but
     // MySqlConnector returns them as DateTimeKind.Unspecified. Marking them UTC
     // makes the API and the published events serialize them with a Z, so a

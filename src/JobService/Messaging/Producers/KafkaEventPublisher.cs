@@ -15,7 +15,7 @@ public class KafkaEventPublisher : IEventPublisher, IDisposable
 {
     // The repository service name, as the naming convention in the contract
     // doc requires.
-    private const string ProducerName = "job-service";
+    public const string ProducerName = "job-service";
 
     // camelCase to match the contract: the REST APIs already serialize this
     // way, and a consumer should not have to switch conventions between them.
@@ -75,6 +75,22 @@ public class KafkaEventPublisher : IEventPublisher, IDisposable
         _logger.LogInformation(
             "Published {EventType} for key {Key} to {TopicPartitionOffset}.",
             eventType,
+            key,
+            result.TopicPartitionOffset);
+    }
+
+    public async Task PublishRawAsync(string topic, string key, string payloadJson, CancellationToken cancellationToken = default)
+    {
+        var message = new Message<string, string>
+        {
+            Key = key,
+            Value = payloadJson
+        };
+
+        var result = await _producer.ProduceAsync(topic, message, cancellationToken);
+
+        _logger.LogInformation(
+            "Published raw event for key {Key} to {TopicPartitionOffset}.",
             key,
             result.TopicPartitionOffset);
     }

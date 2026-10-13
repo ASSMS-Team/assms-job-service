@@ -67,5 +67,17 @@ public interface IJobRepository
     Task AddStatusHistoryAsync(JobStatusHistory history);
 
     Task<IReadOnlyList<JobStatusHistory>> GetStatusHistoryAsync(string jobId);
+
+    /// <summary>Writes an event envelope into the job status outbox for durable delivery.</summary>
+    Task InsertJobStatusOutboxAsync(JobStatusOutboxRecord record, CancellationToken cancellationToken = default);
+
+    /// <summary>Retrieves oldest unpublished outbox events awaiting Kafka delivery.</summary>
+    Task<IReadOnlyList<JobStatusOutboxRecord>> GetPendingJobStatusOutboxEventsAsync(int limit, CancellationToken cancellationToken = default);
+
+    /// <summary>Marks an outbox record as successfully published.</summary>
+    Task MarkJobStatusOutboxPublishedAsync(string id, DateTime publishedAt, CancellationToken cancellationToken = default);
+
+    /// <summary>Records a publication failure attempt on an outbox record.</summary>
+    Task MarkJobStatusOutboxFailedAsync(string id, string error, CancellationToken cancellationToken = default);
 }
 

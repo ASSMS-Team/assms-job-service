@@ -1,3 +1,4 @@
+using System.Text.Json;
 using JobService.DTOs;
 using JobService.Extensions;
 using JobService.Messaging.Contracts;
@@ -442,25 +443,62 @@ public class JobService
     private static DateTime AsUtc(DateTime value) =>
         value.Kind == DateTimeKind.Unspecified ? DateTime.SpecifyKind(value, DateTimeKind.Utc) : value.ToUniversalTime();
 
+    private static readonly JsonSerializerOptions OutboxSerializerOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
+
     private async Task PublishJobStatusChangedAsync(Job job, string oldStatus)
     {
+        var payload = new JobStatusChangedPayload
+        {
+            JobId = job.Id,
+            JobReference = job.JobReference,
+            AssignmentId = job.AssignmentId,
+            TechnicianId = job.AssignedTechnicianId,
+            TechnicianReference = job.AssignedTechnicianReference,
+            OldStatus = oldStatus,
+            NewStatus = job.Status,
+            // Use the stored completed_at / started_at rather than a fresh UtcNow so the
+            // event's business time matches what is in the database. Consumers require
+            // a UTC timestamp (serialized with Z); jobdb timestamps are UTC.
+            OccurredAt = AsUtc((job.Status == CompletedStatus ? job.CompletedAt : job.StartedAt) ?? DateTime.UtcNow)
+        };
+
+        var outboxId = Guid.NewGuid().ToString();
+        var envelope = new EventEnvelope<JobStatusChangedPayload>
+        {
+            EventId = outboxId,
+            EventType = JobStatusChangedPayload.EventType,
+            EventVersion = JobStatusChangedPayload.EventVersion,
+            OccurredAt = payload.OccurredAt,
+            Producer = KafkaEventPublisher.ProducerName,
+            Payload = payload
+        };
+
+        var serializedPayload = JsonSerializer.Serialize(envelope, OutboxSerializerOptions);
+
+        var outboxRecord = new JobStatusOutboxRecord
+        {
+            Id = outboxId,
+            JobId = job.Id,
+            EventType = JobStatusChangedPayload.EventType,
+            Topic = JobStatusChangedPayload.Topic,
+            Payload = serializedPayload,
+            CreatedAt = DateTime.UtcNow
+        };
+
         try
         {
-            var payload = new JobStatusChangedPayload
-            {
-                JobId = job.Id,
-                JobReference = job.JobReference,
-                AssignmentId = job.AssignmentId,
-                TechnicianId = job.AssignedTechnicianId,
-                TechnicianReference = job.AssignedTechnicianReference,
-                OldStatus = oldStatus,
-                NewStatus = job.Status,
-                // Use the stored completed_at / started_at rather than a fresh UtcNow so the
-                // event's business time matches what is in the database. Consumers require
-                // a UTC timestamp (serialized with Z); jobdb timestamps are UTC.
-                OccurredAt = AsUtc((job.Status == CompletedStatus ? job.CompletedAt : job.StartedAt) ?? DateTime.UtcNow)
-            };
+            await _repository.InsertJobStatusOutboxAsync(outboxRecord);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to persist JobStatusChanged outbox record for job {JobId}.", job.Id);
+        }
 
+        try
+        {
             await _eventPublisher.PublishAsync(
                 JobStatusChangedPayload.Topic,
                 JobStatusChangedPayload.EventType,
@@ -468,15 +506,33 @@ public class JobService
                 job.Id,
                 payload);
 
+            try
+            {
+                await _repository.MarkJobStatusOutboxPublishedAsync(outboxId, DateTime.UtcNow);
+            }
+            catch (Exception dbEx)
+            {
+                _logger.LogWarning(dbEx, "Failed to mark outbox event {OutboxId} as published.", outboxId);
+            }
+
             JobMetrics.StatusEventsPublishedTotal.WithLabels(JobStatusChangedPayload.EventType, "success").Inc();
         }
         catch (Exception ex)
         {
+            try
+            {
+                await _repository.MarkJobStatusOutboxFailedAsync(outboxId, ex.Message);
+            }
+            catch (Exception dbEx)
+            {
+                _logger.LogWarning(dbEx, "Failed to update outbox failure status for event {OutboxId}.", outboxId);
+            }
+
             JobMetrics.StatusEventsPublishedTotal.WithLabels(JobStatusChangedPayload.EventType, "failed").Inc();
 
             _logger.LogError(
                 ex,
-                "Job {JobId} ({JobReference}) was transitioned to {NewStatus} but the {EventType} event could not be published.",
+                "Job {JobId} ({JobReference}) was transitioned to {NewStatus} but the {EventType} event could not be published immediately. It remains queued in outbox for retry.",
                 job.Id,
                 job.JobReference,
                 job.Status,

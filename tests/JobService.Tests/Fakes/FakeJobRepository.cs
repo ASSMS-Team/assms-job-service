@@ -233,6 +233,52 @@ public class FakeJobRepository : IJobRepository
             .ToList();
         return Task.FromResult(list);
     }
+
+    public readonly List<JobStatusOutboxRecord> OutboxRecords = new();
+    public int InsertJobStatusOutboxAsyncCallCount;
+    public int MarkJobStatusOutboxPublishedAsyncCallCount;
+    public int MarkJobStatusOutboxFailedAsyncCallCount;
+    public readonly List<string> PublishedEventIds = new();
+    public readonly List<(string EventId, string Error)> FailedEvents = new();
+
+    public Task InsertJobStatusOutboxAsync(JobStatusOutboxRecord record, CancellationToken cancellationToken = default)
+    {
+        InsertJobStatusOutboxAsyncCallCount++;
+        OutboxRecords.Add(record);
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyList<JobStatusOutboxRecord>> GetPendingJobStatusOutboxEventsAsync(int limit, CancellationToken cancellationToken = default)
+    {
+        var pending = OutboxRecords.Where(r => r.PublishedAt == null).Take(limit).ToList();
+        return Task.FromResult<IReadOnlyList<JobStatusOutboxRecord>>(pending);
+    }
+
+    public Task MarkJobStatusOutboxPublishedAsync(string id, DateTime publishedAt, CancellationToken cancellationToken = default)
+    {
+        MarkJobStatusOutboxPublishedAsyncCallCount++;
+        PublishedEventIds.Add(id);
+        var existing = OutboxRecords.FirstOrDefault(r => r.Id == id);
+        if (existing is not null)
+        {
+            var idx = OutboxRecords.IndexOf(existing);
+            OutboxRecords[idx] = existing with { PublishedAt = publishedAt, PublishAttempts = existing.PublishAttempts + 1, LastError = null };
+        }
+        return Task.CompletedTask;
+    }
+
+    public Task MarkJobStatusOutboxFailedAsync(string id, string error, CancellationToken cancellationToken = default)
+    {
+        MarkJobStatusOutboxFailedAsyncCallCount++;
+        FailedEvents.Add((id, error));
+        var existing = OutboxRecords.FirstOrDefault(r => r.Id == id);
+        if (existing is not null)
+        {
+            var idx = OutboxRecords.IndexOf(existing);
+            OutboxRecords[idx] = existing with { PublishAttempts = existing.PublishAttempts + 1, LastError = error };
+        }
+        return Task.CompletedTask;
+    }
 }
 
 // One recorded AppliedAssignment call. A record rather than the Job model:
