@@ -681,6 +681,36 @@ public class JobServiceTests
 
         // Publishing was attempted, not skipped.
         Assert.Equal(1, publisher.PublishAsyncCallCount);
+
+        // S4-KAFKA-01: An outbox record is retained with PublishedAt null for subsequent retry.
+        var outboxRecord = Assert.Single(repository.OutboxRecords);
+        Assert.Equal(AssignedJobId, outboxRecord.JobId);
+        Assert.Equal("job-status-changed", outboxRecord.Topic);
+        Assert.Null(outboxRecord.PublishedAt);
+        Assert.Equal(1, outboxRecord.PublishAttempts);
+        Assert.Contains("Broker unavailable", outboxRecord.LastError);
+    }
+
+    [Fact]
+    public async Task StartJobAsync_WhenPublishingSucceeds_MarksOutboxRecordPublished()
+    {
+        var startedAt = new DateTime(2026, 9, 22, 6, 0, 0, DateTimeKind.Utc);
+        var repository = new FakeJobRepository
+        {
+            StartJobAsyncResult = true,
+            JobToReturn = InProgressJob(startedAt)
+        };
+        var publisher = new FakeEventPublisher();
+        var service = BuildService(repository, new FakeAssetValidationClient(), publisher);
+
+        var result = await service.StartJobAsync(AssignedJobId, ActiveTechnicianId);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(1, publisher.PublishAsyncCallCount);
+        var outboxRecord = Assert.Single(repository.OutboxRecords);
+        Assert.Equal(AssignedJobId, outboxRecord.JobId);
+        Assert.NotNull(outboxRecord.PublishedAt);
+        Assert.Null(outboxRecord.LastError);
     }
 
 

@@ -37,4 +37,24 @@ public class FakeEventPublisher : IEventPublisher
 
         return Task.CompletedTask;
     }
+
+    public string? PublishedRawPayload;
+    public int PublishRawAsyncCallCount;
+    public readonly List<(string Topic, string Key, string Payload)> PublishedRawEvents = new();
+
+    public Task PublishRawAsync(string topic, string key, string payloadJson, CancellationToken cancellationToken = default)
+    {
+        PublishedTopic = topic;
+        PublishedKey = key;
+        PublishedRawPayload = payloadJson;
+        PublishRawAsyncCallCount++;
+        PublishedRawEvents.Add((topic, key, payloadJson));
+
+        if (ExceptionToThrow is not null)
+        {
+            throw ExceptionToThrow;
+        }
+
+        return Task.CompletedTask;
+    }
 }
