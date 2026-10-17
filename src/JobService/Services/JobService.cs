@@ -371,7 +371,7 @@ public class JobService
     // into a business error would hide it. The exception surfaces as a 500.
     private async Task InsertWithFreshReferenceAsync(Job job)
     {
-        for (var attempt = 1; ; attempt++)
+        for (var attempt = 1; attempt <= MaxCreateAttempts; attempt++)
         {
             job.JobReference = JobReferenceGenerator.Generate();
 
@@ -390,6 +390,8 @@ public class JobService
                     MaxCreateAttempts);
             }
         }
+
+        throw new InvalidOperationException("Job creation ended without a result.");
     }
 
     // The job is already committed by the time this runs. A messaging failure

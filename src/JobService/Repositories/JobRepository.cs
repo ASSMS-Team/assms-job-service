@@ -16,6 +16,13 @@ public class JobRepository : IJobRepository
                    completed_at, created_at, updated_at
             FROM jobs";
 
+    private const string ListOrder = " ORDER BY created_at DESC, job_reference ASC;";
+    private const string ListAllQuery = SelectColumns + ListOrder;
+    private const string ListByStatusQuery = SelectColumns + " WHERE status = @status" + ListOrder;
+    private const string ListByTechnicianQuery = SelectColumns + " WHERE assigned_technician_id = @assignedTechnicianId" + ListOrder;
+    private const string ListByStatusAndTechnicianQuery =
+        SelectColumns + " WHERE status = @status AND assigned_technician_id = @assignedTechnicianId" + ListOrder;
+
     private readonly IDbConnectionFactory _connectionFactory;
 
     public JobRepository(IDbConnectionFactory connectionFactory)
@@ -208,23 +215,23 @@ public class JobRepository : IJobRepository
         await connection.OpenAsync();
 
         await using var command = connection.CreateCommand();
-        var predicates = new List<string>();
+        command.CommandText = (status is not null, assignedTechnicianId is not null) switch
+        {
+            (false, false) => ListAllQuery,
+            (true, false) => ListByStatusQuery,
+            (false, true) => ListByTechnicianQuery,
+            (true, true) => ListByStatusAndTechnicianQuery
+        };
 
         if (status is not null)
         {
-            predicates.Add("status = @status");
             command.Parameters.AddWithValue("@status", status);
         }
 
         if (assignedTechnicianId is not null)
         {
-            predicates.Add("assigned_technician_id = @assignedTechnicianId");
             command.Parameters.AddWithValue("@assignedTechnicianId", assignedTechnicianId);
         }
-
-        command.CommandText = SelectColumns
-            + (predicates.Count == 0 ? string.Empty : " WHERE " + string.Join(" AND ", predicates))
-            + " ORDER BY created_at DESC, job_reference ASC;";
 
         await using var reader = (MySqlDataReader)await command.ExecuteReaderAsync();
         var jobs = new List<Job>();
