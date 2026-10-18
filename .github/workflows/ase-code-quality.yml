@@ -1,0 +1,16 @@
+name: ASE code quality
+
+on:
+  push:
+    branches: [ase-quality-reusable-trigger]
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze all ASSMS projects
+    uses: ASSMS-Team/assms-platform-infrastructure/.github/workflows/ase-code-quality.yml@ase-quality-reusable-trigger
+    with:
+      source_repository: assms-job-service
+      source_sha: ${{ github.sha }}
