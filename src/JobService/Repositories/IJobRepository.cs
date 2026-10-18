@@ -38,4 +38,46 @@ public interface IJobRepository
         string technicianReference,
         string status,
         DateTime assignedAt);
+
+    // Transitions the job from ASSIGNED → IN_PROGRESS, recording the start
+    // timestamp. The update is guarded: it matches only when the job exists,
+    // is currently ASSIGNED, and the supplied technicianId is the active assignee.
+    //
+    // Returns true when the row was changed, false when the guard prevented it.
+    // False is not retried; the service reads the job to distinguish the three
+    // possible reasons (not found, wrong status, wrong technician) and returns
+    // the appropriate error to the controller.
+    Task<bool> StartJobAsync(string jobId, string technicianId, DateTime startedAt);
+
+    /// <summary>Transitions the job from IN_PROGRESS → COMPLETED, recording completed_at.</summary>
+    Task<bool> CompleteJobAsync(string jobId, string technicianId, DateTime completedAt);
+
+    /// <summary>Persists a service work record for an active job.</summary>
+    Task<ServiceWorkRecord> AddWorkRecordAsync(ServiceWorkRecord record);
+
+    /// <summary>Retrieves all service work records for a job ordered by recorded_at.</summary>
+    Task<IReadOnlyList<ServiceWorkRecord>> GetWorkRecordsByJobIdAsync(string jobId);
+
+    /// <summary>Updates the content of a work record belonging to the specified job.</summary>
+    Task<bool> UpdateWorkRecordAsync(string recordId, string jobId, string content);
+
+    /// <summary>Deletes a work record belonging to the specified job.</summary>
+    Task<bool> DeleteWorkRecordAsync(string recordId, string jobId);
+
+    Task AddStatusHistoryAsync(JobStatusHistory history);
+
+    Task<IReadOnlyList<JobStatusHistory>> GetStatusHistoryAsync(string jobId);
+
+    /// <summary>Writes an event envelope into the job status outbox for durable delivery.</summary>
+    Task InsertJobStatusOutboxAsync(JobStatusOutboxRecord record, CancellationToken cancellationToken = default);
+
+    /// <summary>Retrieves oldest unpublished outbox events awaiting Kafka delivery.</summary>
+    Task<IReadOnlyList<JobStatusOutboxRecord>> GetPendingJobStatusOutboxEventsAsync(int limit, CancellationToken cancellationToken = default);
+
+    /// <summary>Marks an outbox record as successfully published.</summary>
+    Task MarkJobStatusOutboxPublishedAsync(string id, DateTime publishedAt, CancellationToken cancellationToken = default);
+
+    /// <summary>Records a publication failure attempt on an outbox record.</summary>
+    Task MarkJobStatusOutboxFailedAsync(string id, string error, CancellationToken cancellationToken = default);
 }
+

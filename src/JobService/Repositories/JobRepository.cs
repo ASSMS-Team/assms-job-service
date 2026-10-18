@@ -12,8 +12,16 @@ public class JobRepository : IJobRepository
             SELECT id, job_reference, customer_id, asset_id, service_category,
                    problem_description, priority, region, scheduled_date,
                    created_by, status, assignment_id, assigned_technician_id,
-                   assigned_technician_reference, assigned_at, created_at, updated_at
+                   assigned_technician_reference, assigned_at, started_at,
+                   completed_at, created_at, updated_at
             FROM jobs";
+
+    private const string ListOrder = " ORDER BY created_at DESC, job_reference ASC;";
+    private const string ListAllQuery = SelectColumns + ListOrder;
+    private const string ListByStatusQuery = SelectColumns + " WHERE status = @status" + ListOrder;
+    private const string ListByTechnicianQuery = SelectColumns + " WHERE assigned_technician_id = @assignedTechnicianId" + ListOrder;
+    private const string ListByStatusAndTechnicianQuery =
+        SelectColumns + " WHERE status = @status AND assigned_technician_id = @assignedTechnicianId" + ListOrder;
 
     private readonly IDbConnectionFactory _connectionFactory;
 
@@ -116,6 +124,61 @@ public class JobRepository : IJobRepository
         return rowsAffected > 0;
     }
 
+    // Updates status to IN_PROGRESS and records started_at in a single
+    // statement. The WHERE clause is the whole guard:
+    //   status = 'ASSIGNED'         — rejects any invalid lifecycle transition
+    //   assigned_technician_id = @technicianId — rejects a non-assignee caller
+    //   id = @jobId                  — scopes to the requested job
+    //
+    // updated_at is not named: the ON UPDATE clause on the column moves it
+    // automatically whenever any other column actually changes.
+    public async Task<bool> StartJobAsync(string jobId, string technicianId, DateTime startedAt)
+    {
+        await using var connection = _connectionFactory.CreateConnection();
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            UPDATE jobs
+            SET    status     = 'IN_PROGRESS',
+                   started_at = @startedAt
+            WHERE  id                     = @jobId
+              AND  status                 = 'ASSIGNED'
+              AND  assigned_technician_id = @technicianId;";
+
+        command.Parameters.AddWithValue("@jobId", jobId);
+        command.Parameters.AddWithValue("@technicianId", technicianId);
+        command.Parameters.AddWithValue("@startedAt", startedAt);
+
+        var rowsAffected = await command.ExecuteNonQueryAsync();
+
+        return rowsAffected > 0;
+    }
+
+    public async Task<bool> CompleteJobAsync(string jobId, string technicianId, DateTime completedAt)
+    {
+        await using var connection = _connectionFactory.CreateConnection();
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            UPDATE jobs
+            SET    status       = 'COMPLETED',
+                   completed_at = @completedAt
+            WHERE  id                     = @jobId
+              AND  status                 = 'IN_PROGRESS'
+              AND  assigned_technician_id = @technicianId;";
+
+        command.Parameters.AddWithValue("@jobId", jobId);
+        command.Parameters.AddWithValue("@technicianId", technicianId);
+        command.Parameters.AddWithValue("@completedAt", completedAt);
+
+        var rowsAffected = await command.ExecuteNonQueryAsync();
+
+        return rowsAffected > 0;
+    }
+
+
     public async Task<Job?> GetByIdAsync(string id)
     {
         await using var connection = _connectionFactory.CreateConnection();
@@ -152,23 +215,23 @@ public class JobRepository : IJobRepository
         await connection.OpenAsync();
 
         await using var command = connection.CreateCommand();
-        var predicates = new List<string>();
+        command.CommandText = (status is not null, assignedTechnicianId is not null) switch
+        {
+            (false, false) => ListAllQuery,
+            (true, false) => ListByStatusQuery,
+            (false, true) => ListByTechnicianQuery,
+            (true, true) => ListByStatusAndTechnicianQuery
+        };
 
         if (status is not null)
         {
-            predicates.Add("status = @status");
             command.Parameters.AddWithValue("@status", status);
         }
 
         if (assignedTechnicianId is not null)
         {
-            predicates.Add("assigned_technician_id = @assignedTechnicianId");
             command.Parameters.AddWithValue("@assignedTechnicianId", assignedTechnicianId);
         }
-
-        command.CommandText = SelectColumns
-            + (predicates.Count == 0 ? string.Empty : " WHERE " + string.Join(" AND ", predicates))
-            + " ORDER BY created_at DESC, job_reference ASC;";
 
         await using var reader = (MySqlDataReader)await command.ExecuteReaderAsync();
         var jobs = new List<Job>();
@@ -207,6 +270,9 @@ public class JobRepository : IJobRepository
         var assignedTechnicianIdOrdinal = reader.GetOrdinal("assigned_technician_id");
         var assignedTechnicianReferenceOrdinal = reader.GetOrdinal("assigned_technician_reference");
         var assignedAtOrdinal = reader.GetOrdinal("assigned_at");
+        var startedAtOrdinal = reader.GetOrdinal("started_at");
+        var completedAtOrdinal = -1;
+        try { completedAtOrdinal = reader.GetOrdinal("completed_at"); } catch { }
         var createdAtOrdinal = reader.GetOrdinal("created_at");
         var updatedAtOrdinal = reader.GetOrdinal("updated_at");
 
@@ -233,9 +299,337 @@ public class JobRepository : IJobRepository
             AssignmentId = reader.IsDBNull(assignmentIdOrdinal) ? null : reader.GetValue(assignmentIdOrdinal).ToString(),
             AssignedTechnicianId = reader.IsDBNull(assignedTechnicianIdOrdinal) ? null : reader.GetValue(assignedTechnicianIdOrdinal).ToString(),
             AssignedTechnicianReference = reader.IsDBNull(assignedTechnicianReferenceOrdinal) ? null : reader.GetString(assignedTechnicianReferenceOrdinal),
-            AssignedAt = reader.IsDBNull(assignedAtOrdinal) ? null : reader.GetDateTime(assignedAtOrdinal),
-            CreatedAt = reader.GetDateTime(createdAtOrdinal),
-            UpdatedAt = reader.GetDateTime(updatedAtOrdinal)
+            AssignedAt = reader.IsDBNull(assignedAtOrdinal) ? null : ReadUtc(reader, assignedAtOrdinal),
+            StartedAt = reader.IsDBNull(startedAtOrdinal) ? null : ReadUtc(reader, startedAtOrdinal),
+            CompletedAt = completedAtOrdinal >= 0 && !reader.IsDBNull(completedAtOrdinal) ? ReadUtc(reader, completedAtOrdinal) : null,
+            CreatedAt = ReadUtc(reader, createdAtOrdinal),
+            UpdatedAt = ReadUtc(reader, updatedAtOrdinal)
         };
     }
+
+    public async Task<ServiceWorkRecord> AddWorkRecordAsync(ServiceWorkRecord record)
+    {
+        await using var connection = _connectionFactory.CreateConnection();
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            INSERT INTO service_work_records (
+                id,
+                job_id,
+                job_reference,
+                technician_id,
+                technician_reference,
+                content,
+                recorded_at,
+                created_at
+            ) VALUES (
+                @id,
+                @jobId,
+                @jobReference,
+                @technicianId,
+                @technicianReference,
+                @content,
+                @recordedAt,
+                @createdAt
+            );";
+
+        command.Parameters.AddWithValue("@id", record.Id);
+        command.Parameters.AddWithValue("@jobId", record.JobId);
+        command.Parameters.AddWithValue("@jobReference", record.JobReference);
+        command.Parameters.AddWithValue("@technicianId", record.TechnicianId);
+        command.Parameters.AddWithValue("@technicianReference", record.TechnicianReference);
+        command.Parameters.AddWithValue("@content", record.Content);
+        command.Parameters.AddWithValue("@recordedAt", record.RecordedAt);
+        command.Parameters.AddWithValue("@createdAt", record.CreatedAt);
+
+        await command.ExecuteNonQueryAsync();
+        return record;
+    }
+
+    public async Task<IReadOnlyList<ServiceWorkRecord>> GetWorkRecordsByJobIdAsync(string jobId)
+    {
+        await using var connection = _connectionFactory.CreateConnection();
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            SELECT id, job_id, job_reference, technician_id, technician_reference, content, recorded_at, created_at
+            FROM service_work_records
+            WHERE job_id = @jobId
+            ORDER BY recorded_at ASC;";
+
+        command.Parameters.AddWithValue("@jobId", jobId);
+
+        await using var reader = (MySqlDataReader)await command.ExecuteReaderAsync();
+        var records = new List<ServiceWorkRecord>();
+        while (await reader.ReadAsync())
+        {
+            var idOrdinal = reader.GetOrdinal("id");
+            var jobIdOrdinal = reader.GetOrdinal("job_id");
+            var jobReferenceOrdinal = reader.GetOrdinal("job_reference");
+            var technicianIdOrdinal = reader.GetOrdinal("technician_id");
+            var technicianReferenceOrdinal = reader.GetOrdinal("technician_reference");
+            var contentOrdinal = reader.GetOrdinal("content");
+            var recordedAtOrdinal = reader.GetOrdinal("recorded_at");
+            var createdAtOrdinal = reader.GetOrdinal("created_at");
+
+            records.Add(new ServiceWorkRecord
+            {
+                Id = reader.GetValue(idOrdinal)?.ToString() ?? string.Empty,
+                JobId = reader.GetValue(jobIdOrdinal)?.ToString() ?? string.Empty,
+                JobReference = reader.GetString(jobReferenceOrdinal),
+                TechnicianId = reader.GetValue(technicianIdOrdinal)?.ToString() ?? string.Empty,
+                TechnicianReference = reader.GetString(technicianReferenceOrdinal),
+                Content = reader.GetString(contentOrdinal),
+                RecordedAt = ReadUtc(reader, recordedAtOrdinal),
+                CreatedAt = ReadUtc(reader, createdAtOrdinal)
+            });
+        }
+
+        return records;
+    }
+
+    public async Task<bool> UpdateWorkRecordAsync(string recordId, string jobId, string content)
+    {
+        await using var connection = _connectionFactory.CreateConnection();
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            UPDATE service_work_records
+            SET content = @content
+            WHERE id = @recordId AND job_id = @jobId;";
+
+        command.Parameters.AddWithValue("@recordId", recordId);
+        command.Parameters.AddWithValue("@jobId", jobId);
+        command.Parameters.AddWithValue("@content", content);
+
+        var changedRows = await command.ExecuteNonQueryAsync();
+        if (changedRows > 0)
+        {
+            return true;
+        }
+
+        // MySQL reports zero affected rows when the supplied content is already
+        // stored. Treat that idempotent PUT as success, and distinguish it from
+        // a record that does not exist on this job.
+        await using var existsCommand = connection.CreateCommand();
+        existsCommand.CommandText = @"
+            SELECT EXISTS (
+                SELECT 1
+                FROM service_work_records
+                WHERE id = @recordId AND job_id = @jobId
+            );";
+        existsCommand.Parameters.AddWithValue("@recordId", recordId);
+        existsCommand.Parameters.AddWithValue("@jobId", jobId);
+
+        var exists = await existsCommand.ExecuteScalarAsync();
+        return Convert.ToInt32(exists) == 1;
+    }
+
+    public async Task<bool> DeleteWorkRecordAsync(string recordId, string jobId)
+    {
+        await using var connection = _connectionFactory.CreateConnection();
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            DELETE FROM service_work_records
+            WHERE id = @recordId AND job_id = @jobId;";
+
+        command.Parameters.AddWithValue("@recordId", recordId);
+        command.Parameters.AddWithValue("@jobId", jobId);
+
+        var rowsAffected = await command.ExecuteNonQueryAsync();
+        return rowsAffected > 0;
+    }
+
+    public async Task AddStatusHistoryAsync(JobStatusHistory history)
+    {
+        await using var connection = _connectionFactory.CreateConnection();
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            INSERT INTO job_status_history
+            (id, job_id, previous_status, new_status, actor_id, created_at)
+            VALUES
+            (@id, @jobId, @previousStatus, @newStatus, @actorId, @createdAt);";
+
+        command.Parameters.AddWithValue("@id", history.Id);
+        command.Parameters.AddWithValue("@jobId", history.JobId);
+        command.Parameters.AddWithValue("@previousStatus", (object?)history.PreviousStatus ?? DBNull.Value);
+        command.Parameters.AddWithValue("@newStatus", history.NewStatus);
+        command.Parameters.AddWithValue("@actorId", history.ActorId);
+        command.Parameters.AddWithValue("@createdAt", history.CreatedAt);
+
+        await command.ExecuteNonQueryAsync();
+    }
+
+    public async Task<IReadOnlyList<JobStatusHistory>> GetStatusHistoryAsync(string jobId)
+    {
+        await using var connection = _connectionFactory.CreateConnection();
+        await connection.OpenAsync();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            SELECT id, job_id, previous_status, new_status, actor_id, created_at
+            FROM job_status_history
+            WHERE job_id = @jobId
+            ORDER BY created_at ASC;";
+
+        command.Parameters.AddWithValue("@jobId", jobId);
+
+        await using var reader = (MySqlConnector.MySqlDataReader)await command.ExecuteReaderAsync();
+        var history = new List<JobStatusHistory>();
+
+        while (await reader.ReadAsync())
+        {
+            var idOrdinal = reader.GetOrdinal("id");
+            var jobIdOrdinal = reader.GetOrdinal("job_id");
+            var previousStatusOrdinal = reader.GetOrdinal("previous_status");
+            var newStatusOrdinal = reader.GetOrdinal("new_status");
+            var actorIdOrdinal = reader.GetOrdinal("actor_id");
+            var createdAtOrdinal = reader.GetOrdinal("created_at");
+
+            history.Add(new JobStatusHistory
+            {
+                Id = reader.GetValue(idOrdinal)?.ToString() ?? string.Empty,
+                JobId = reader.GetValue(jobIdOrdinal)?.ToString() ?? string.Empty,
+                PreviousStatus = reader.IsDBNull(previousStatusOrdinal) ? null : reader.GetString(previousStatusOrdinal),
+                NewStatus = reader.GetString(newStatusOrdinal),
+                ActorId = reader.GetValue(actorIdOrdinal)?.ToString() ?? string.Empty,
+                CreatedAt = ReadUtc(reader, createdAtOrdinal)
+            });
+        }
+
+        return history;
+    }
+
+    public async Task InsertJobStatusOutboxAsync(JobStatusOutboxRecord record, CancellationToken cancellationToken = default)
+    {
+        await using var connection = _connectionFactory.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            INSERT INTO job_status_outbox (
+                id,
+                job_id,
+                event_type,
+                topic,
+                payload,
+                publish_attempts,
+                created_at
+            ) VALUES (
+                @id,
+                @jobId,
+                @eventType,
+                @topic,
+                CAST(@payload AS JSON),
+                @publishAttempts,
+                @createdAt
+            );";
+
+        command.Parameters.AddWithValue("@id", record.Id);
+        command.Parameters.AddWithValue("@jobId", record.JobId);
+        command.Parameters.AddWithValue("@eventType", record.EventType);
+        command.Parameters.AddWithValue("@topic", record.Topic);
+        command.Parameters.AddWithValue("@payload", record.Payload);
+        command.Parameters.AddWithValue("@publishAttempts", record.PublishAttempts);
+        command.Parameters.AddWithValue("@createdAt", record.CreatedAt ?? DateTime.UtcNow);
+
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<JobStatusOutboxRecord>> GetPendingJobStatusOutboxEventsAsync(int limit, CancellationToken cancellationToken = default)
+    {
+        await using var connection = _connectionFactory.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            SELECT id, job_id, event_type, topic, payload, publish_attempts, last_error, created_at, published_at
+            FROM job_status_outbox
+            WHERE published_at IS NULL
+            ORDER BY created_at ASC, id ASC
+            LIMIT @limit;";
+
+        command.Parameters.AddWithValue("@limit", Math.Clamp(limit, 1, 100));
+
+        var results = new List<JobStatusOutboxRecord>();
+        await using var reader = (MySqlDataReader)await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var idOrdinal = reader.GetOrdinal("id");
+            var jobIdOrdinal = reader.GetOrdinal("job_id");
+            var eventTypeOrdinal = reader.GetOrdinal("event_type");
+            var topicOrdinal = reader.GetOrdinal("topic");
+            var payloadOrdinal = reader.GetOrdinal("payload");
+            var publishAttemptsOrdinal = reader.GetOrdinal("publish_attempts");
+            var lastErrorOrdinal = reader.GetOrdinal("last_error");
+            var createdAtOrdinal = reader.GetOrdinal("created_at");
+            var publishedAtOrdinal = reader.GetOrdinal("published_at");
+
+            results.Add(new JobStatusOutboxRecord
+            {
+                Id = reader.GetValue(idOrdinal)?.ToString() ?? string.Empty,
+                JobId = reader.GetValue(jobIdOrdinal)?.ToString() ?? string.Empty,
+                EventType = reader.GetString(eventTypeOrdinal),
+                Topic = reader.GetString(topicOrdinal),
+                Payload = reader.GetString(payloadOrdinal),
+                PublishAttempts = reader.GetInt32(publishAttemptsOrdinal),
+                LastError = reader.IsDBNull(lastErrorOrdinal) ? null : reader.GetString(lastErrorOrdinal),
+                CreatedAt = ReadUtc(reader, createdAtOrdinal),
+                PublishedAt = reader.IsDBNull(publishedAtOrdinal) ? null : ReadUtc(reader, publishedAtOrdinal)
+            });
+        }
+
+        return results;
+    }
+
+    public async Task MarkJobStatusOutboxPublishedAsync(string id, DateTime publishedAt, CancellationToken cancellationToken = default)
+    {
+        await using var connection = _connectionFactory.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            UPDATE job_status_outbox
+            SET published_at = @publishedAt,
+                publish_attempts = publish_attempts + 1,
+                last_error = NULL
+            WHERE id = @id AND published_at IS NULL;";
+
+        command.Parameters.AddWithValue("@id", id);
+        command.Parameters.AddWithValue("@publishedAt", publishedAt.Kind == DateTimeKind.Utc ? publishedAt : publishedAt.ToUniversalTime());
+
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task MarkJobStatusOutboxFailedAsync(string id, string error, CancellationToken cancellationToken = default)
+    {
+        await using var connection = _connectionFactory.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            UPDATE job_status_outbox
+            SET publish_attempts = publish_attempts + 1,
+                last_error = @error
+            WHERE id = @id AND published_at IS NULL;";
+
+        command.Parameters.AddWithValue("@id", id);
+        command.Parameters.AddWithValue("@error", error.Length > 1000 ? error[..1000] : error);
+
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    // TIMESTAMP columns are stored in UTC and the service writes UtcNow, but
+    // MySqlConnector returns them as DateTimeKind.Unspecified. Marking them UTC
+    // makes the API and the published events serialize them with a Z, so a
+    // consumer or browser does not read them as local time.
+    private static DateTime ReadUtc(MySqlDataReader reader, int ordinal) =>
+        DateTime.SpecifyKind(reader.GetDateTime(ordinal), DateTimeKind.Utc);
 }

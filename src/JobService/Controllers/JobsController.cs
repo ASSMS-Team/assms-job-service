@@ -1,6 +1,8 @@
 using JobService.DTOs;
+using JobService.Security;
 using JobService.Services;
 
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace JobService.Controllers;
@@ -12,7 +14,7 @@ public class JobsController : ControllerBase
 {
     private static readonly HashSet<string> SupportedStatuses = new(StringComparer.Ordinal)
     {
-        "CREATED", "ASSIGNED"
+        "CREATED", "ASSIGNED", "IN_PROGRESS", "COMPLETED"
     };
     // Qualified: the class shares its name with the root namespace, so the bare
     // name would bind to the namespace and not compile.
@@ -22,6 +24,59 @@ public class JobsController : ControllerBase
     {
         _jobService = jobService;
     }
+
+    // Returns the assignment's technician id when the authenticated caller is
+    // the job's active assignee, otherwise null. The identity comes only from
+    // the token; never trust a query/body/header ID.
+    private string? ActiveAssigneeId(JobResponse job)
+    {
+        if (job.Assignment is null) return null;
+        var linkedId = User?.FindFirst("technician_id")?.Value;
+        if (linkedId is not null)
+            return Guid.TryParse(linkedId, out var technicianId)
+                && Guid.TryParse(job.Assignment.TechnicianId, out var assignedId)
+                && technicianId == assignedId
+                ? job.Assignment.TechnicianId
+                : null;
+        // Compatibility for older tokens whose username is the reference.
+        var reference = User?.FindFirst("unique_name")?.Value;
+        return !string.IsNullOrWhiteSpace(reference)
+            && string.Equals(reference, job.Assignment.TechnicianReference, StringComparison.OrdinalIgnoreCase)
+            ? job.Assignment.TechnicianId
+            : null;
+    }
+
+    private bool CanReadJob(JobResponse job) =>
+        // Role authorization still gates these actions. A Technician must also
+        // own the local JobAssigned projection.
+        User?.IsInRole(StaffRoles.Technician) != true || ActiveAssigneeId(job) is not null;
+
+    private async Task<IActionResult?> CheckTechnicianAccessAsync(string id)
+    {
+        if (User?.IsInRole(StaffRoles.Technician) != true) return null;
+        var job = await _jobService.GetByIdAsync(id);
+        if (job is null) return NotFound();
+        return CanReadJob(job) ? null : Forbid();
+    }
+
+    // Lifecycle and work-record writes act as the active assignee. The acting
+    // technician id is derived from the token and the job's assignment, so a
+    // caller cannot act for another technician by naming their id.
+    private async Task<(IActionResult? Denied, string TechnicianId)> ResolveActiveAssigneeAsync(string id)
+    {
+        var job = await _jobService.GetByIdAsync(id);
+        if (job is null) return (NotFound(), string.Empty);
+        var technicianId = ActiveAssigneeId(job);
+        return technicianId is null ? (NotTheAssignee(), string.Empty) : (null, technicianId);
+    }
+
+    private ObjectResult NotTheAssignee() =>
+        StatusCode(StatusCodes.Status403Forbidden, new ProblemDetails
+        {
+            Title = "Forbidden.",
+            Detail = "The authenticated technician is not the active assignee of this job.",
+            Status = StatusCodes.Status403Forbidden
+        });
 
     // [ApiController] returns 400 with ValidationProblemDetails before this runs,
     // so there is no validation code here - only the business rules to branch on.
@@ -37,6 +92,7 @@ public class JobsController : ControllerBase
     /// <response code="409">The asset and customer are a pairing no job can be raised against: no such asset, the asset belongs to a different customer, the asset is inactive, or the customer is inactive. The four are told apart by the key and message in the body.</response>
     /// <response code="503">The Customer &amp; Asset Service could not be reached, so the asset could not be validated. No job was created and the request can be retried unchanged.</response>
     [HttpPost]
+    [Authorize(Roles = StaffRoles.JobCreators)]
     [ProducesResponseType(typeof(JobResponse), StatusCodes.Status201Created)]
     [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status409Conflict)]
@@ -122,6 +178,7 @@ public class JobsController : ControllerBase
     /// JobAssigned projection in jobdb; this endpoint never reads dispatchdb.
     /// </summary>
     [HttpGet]
+    [Authorize(Roles = StaffRoles.JobViewers)]
     [ProducesResponseType(typeof(IReadOnlyList<JobResponse>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> List([FromQuery] string? status, [FromQuery] string? assignedTechnicianId)
@@ -153,6 +210,7 @@ public class JobsController : ControllerBase
     /// <response code="200">The job with this id.</response>
     /// <response code="404">No job exists with this id.</response>
     [HttpGet("{id}")]
+    [Authorize(Roles = StaffRoles.JobDetailViewers)]
     [ProducesResponseType(typeof(JobResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetById(string id)
@@ -164,7 +222,32 @@ public class JobsController : ControllerBase
             return NotFound();
         }
 
+        if (!CanReadJob(job)) return Forbid();
         return Ok(job);
+    }
+
+    /// <summary>
+    /// Returns the status history of a job.
+    /// </summary>
+    /// <param name="id">The server-generated job id.</param>
+    /// <response code="200">The status history of the job.</response>
+    /// <response code="404">No job exists with this id.</response>
+    [HttpGet("{id}/history")]
+    [Authorize(Roles = StaffRoles.JobDetailViewers)]
+    [ProducesResponseType(typeof(IReadOnlyList<JobStatusHistoryResponse>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetStatusHistory(string id)
+    {
+        var denied = await CheckTechnicianAccessAsync(id);
+        if (denied is not null) return denied;
+        var history = await _jobService.GetStatusHistoryAsync(id);
+
+        if (history is null)
+        {
+            return NotFound();
+        }
+
+        return Ok(history);
     }
 
     /// <summary>
@@ -178,6 +261,7 @@ public class JobsController : ControllerBase
     // different formats and guessing which one was supplied would make a
     // mistyped id look like a missing reference.
     [HttpGet("reference/{jobReference}")]
+    [Authorize(Roles = StaffRoles.JobViewers)]
     [ProducesResponseType(typeof(JobResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetByReference(string jobReference)
@@ -190,6 +274,310 @@ public class JobsController : ControllerBase
         }
 
         return Ok(job);
+    }
+
+    /// <summary>
+    /// Starts an assigned job on behalf of its active technician. The job must
+    /// be in status ASSIGNED and the caller must be the active assignee.
+    /// On success the job moves to IN_PROGRESS and a JobStatusChanged event is
+    /// published to the job-status-changed Kafka topic.
+    /// </summary>
+    /// <param name="id">The server-generated job id (a GUID string).</param>
+    /// <response code="200">The job has been moved to IN_PROGRESS. The response body is the updated job.</response>
+    /// <response code="403">The caller is not a Technician, or is not the active assignee of this job.</response>
+    /// <response code="404">No job exists with this id.</response>
+    /// <response code="409">The job is not in a state that allows the start transition (it is not ASSIGNED).</response>
+    [HttpPost("{id}/start")]
+    [Authorize(Roles = StaffRoles.Technician)]
+    [ProducesResponseType(typeof(JobResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> Start(string id)
+    {
+        var (denied, technicianId) = await ResolveActiveAssigneeAsync(id);
+        if (denied is not null) return denied;
+
+        var result = await _jobService.StartJobAsync(id, technicianId);
+
+        if (result.Error == ServiceError.JobNotFound)
+            return NotFound();
+
+        if (result.Error == ServiceError.NotTheAssignee)
+            return NotTheAssignee();
+
+        if (result.Error == ServiceError.NotAssigned)
+        {
+            return Conflict(new ProblemDetails
+            {
+                Title = "Invalid lifecycle transition.",
+                Detail = "Only a job in status ASSIGNED can be started. The job is currently in a different status.",
+                Status = StatusCodes.Status409Conflict
+            });
+        }
+
+        return Ok(result.Value);
+    }
+
+    /// <summary>
+    /// Completes an in-progress job on behalf of its active technician. The job must
+    /// be in status IN_PROGRESS, caller must be the active assignee, and required work
+    /// records must exist. On success the job moves to COMPLETED and a JobStatusChanged
+    /// event is published.
+    /// </summary>
+    /// <param name="id">The server-generated job id (a GUID string).</param>
+    /// <response code="200">The job has been moved to COMPLETED. The response body is the updated job.</response>
+    /// <response code="400">Work records are required before completion.</response>
+    /// <response code="403">The caller is not a Technician, or is not the active assignee of this job.</response>
+    /// <response code="404">No job exists with this id.</response>
+    /// <response code="409">The job is not in status IN_PROGRESS.</response>
+    [HttpPost("{id}/complete")]
+    [Authorize(Roles = StaffRoles.Technician)]
+    [ProducesResponseType(typeof(JobResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> Complete(string id)
+    {
+        var (denied, technicianId) = await ResolveActiveAssigneeAsync(id);
+        if (denied is not null) return denied;
+
+        var result = await _jobService.CompleteJobAsync(id, technicianId);
+
+        if (result.Error == ServiceError.JobNotFound)
+        {
+            return NotFound();
+        }
+
+        if (result.Error == ServiceError.NotTheAssignee)
+            return NotTheAssignee();
+
+        if (result.Error == ServiceError.JobNotInProgress)
+        {
+            return Conflict(new ProblemDetails
+            {
+                Title = "Job is not in progress.",
+                Detail = "Only a job in status IN_PROGRESS can be completed.",
+                Status = StatusCodes.Status409Conflict
+            });
+        }
+
+        if (result.Error == ServiceError.WorkRecordsRequired)
+        {
+            return BadRequest(new ValidationProblemDetails(
+                new Dictionary<string, string[]>
+                {
+                    ["workRecords"] = new[] { "At least one service work record must be recorded before completing the job." }
+                })
+            {
+                Title = "Work records required.",
+                Detail = "At least one service work record must be recorded before completing the job.",
+                Status = StatusCodes.Status400BadRequest
+            });
+        }
+
+        return Ok(result.Value);
+    }
+
+    /// <summary>
+    /// Adds a service work record to an active job. The job must be in status IN_PROGRESS
+    /// and the caller must be the active assignee.
+    /// </summary>
+    /// <param name="id">The server-generated job id (a GUID string).</param>
+    /// <param name="request">The work record content.</param>
+    /// <response code="201">The work record was created and saved.</response>
+    /// <response code="400">Content was missing/empty.</response>
+    /// <response code="403">The caller is not a Technician, or is not the active assignee of this job.</response>
+    /// <response code="404">No job exists with this id.</response>
+    /// <response code="409">The job is not in status IN_PROGRESS.</response>
+    [HttpPost("{id}/work-records")]
+    [Authorize(Roles = StaffRoles.Technician)]
+    [ProducesResponseType(typeof(ServiceWorkRecordResponse), StatusCodes.Status201Created)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> AddWorkRecord(string id, [FromBody] CreateWorkRecordRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.Content))
+        {
+            return BadRequest(new ValidationProblemDetails(
+                new Dictionary<string, string[]>
+                {
+                    ["content"] = new[] { "Work record content is required." }
+                })
+            {
+                Status = StatusCodes.Status400BadRequest
+            });
+        }
+
+        var (denied, technicianId) = await ResolveActiveAssigneeAsync(id);
+        if (denied is not null) return denied;
+
+        var result = await _jobService.AddWorkRecordAsync(id, technicianId, request.Content);
+
+        if (result.Error == ServiceError.JobNotFound)
+            return NotFound();
+
+        if (result.Error == ServiceError.NotTheAssignee)
+            return NotTheAssignee();
+
+        if (result.Error == ServiceError.JobNotInProgress)
+        {
+            return Conflict(new ProblemDetails
+            {
+                Title = "Job is not in progress.",
+                Detail = "Work records can only be added to a job in status IN_PROGRESS.",
+                Status = StatusCodes.Status409Conflict
+            });
+        }
+
+        if (result.Error == ServiceError.MissingContent)
+        {
+            return BadRequest(new ValidationProblemDetails(
+                new Dictionary<string, string[]>
+                {
+                    ["content"] = new[] { "Work record content is required." }
+                })
+            {
+                Status = StatusCodes.Status400BadRequest
+            });
+        }
+
+        return CreatedAtAction(
+            nameof(GetWorkRecords),
+            new { id },
+            result.Value);
+    }
+
+    /// <summary>
+    /// Retrieves all service work records for the specified job.
+    /// </summary>
+    /// <param name="id">The server-generated job id (a GUID string).</param>
+    /// <response code="200">The list of service work records for this job.</response>
+    /// <response code="404">No job exists with this id.</response>
+    [HttpGet("{id}/work-records")]
+    [Authorize(Roles = StaffRoles.JobDetailViewers)]
+    [ProducesResponseType(typeof(IReadOnlyList<ServiceWorkRecordResponse>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetWorkRecords(string id)
+    {
+        var denied = await CheckTechnicianAccessAsync(id);
+        if (denied is not null) return denied;
+        var records = await _jobService.GetWorkRecordsAsync(id);
+
+        if (records is null)
+        {
+            return NotFound();
+        }
+
+        return Ok(records);
+    }
+
+    /// <summary>
+    /// Updates a work record on an in-progress job. Only the active assignee may update it.
+    /// </summary>
+    [HttpPut("{id}/work-records/{recordId}")]
+    [Authorize(Roles = StaffRoles.Technician)]
+    [ProducesResponseType(typeof(ServiceWorkRecordResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> UpdateWorkRecord(string id, string recordId, [FromBody] UpdateWorkRecordRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.Content))
+        {
+            return BadRequest(new ValidationProblemDetails(
+                new Dictionary<string, string[]>
+                {
+                    ["content"] = new[] { "Work record content is required." }
+                })
+            {
+                Status = StatusCodes.Status400BadRequest
+            });
+        }
+
+        var (denied, technicianId) = await ResolveActiveAssigneeAsync(id);
+        if (denied is not null) return denied;
+
+        var result = await _jobService.UpdateWorkRecordAsync(id, recordId, technicianId, request.Content);
+
+        if (result.Error is ServiceError.JobNotFound or ServiceError.WorkRecordNotFound)
+        {
+            return NotFound();
+        }
+
+        if (result.Error == ServiceError.NotTheAssignee)
+            return NotTheAssignee();
+
+        if (result.Error == ServiceError.JobNotInProgress)
+        {
+            return Conflict(new ProblemDetails
+            {
+                Title = "Job is not in progress.",
+                Detail = "Work records can only be updated on a job in status IN_PROGRESS.",
+                Status = StatusCodes.Status409Conflict
+            });
+        }
+
+        if (result.Error == ServiceError.MissingContent)
+        {
+            return BadRequest(new ValidationProblemDetails(
+                new Dictionary<string, string[]>
+                {
+                    ["content"] = new[] { "Work record content is required." }
+                })
+            {
+                Status = StatusCodes.Status400BadRequest
+            });
+        }
+
+        return Ok(result.Value);
+    }
+
+    /// <summary>
+    /// Deletes a draft work record from an in-progress job. Only the active assignee may delete it.
+    /// </summary>
+    /// <param name="id">The server-generated job id (a GUID string).</param>
+    /// <param name="recordId">The server-generated work record id.</param>
+    /// <response code="204">The work record was removed.</response>
+    /// <response code="403">The caller is not a Technician, or is not the active assignee of this job.</response>
+    /// <response code="404">No job or work record exists with this id.</response>
+    /// <response code="409">The job is not in status IN_PROGRESS.</response>
+    [HttpDelete("{id}/work-records/{recordId}")]
+    [Authorize(Roles = StaffRoles.Technician)]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> DeleteWorkRecord(string id, string recordId)
+    {
+        var (denied, technicianId) = await ResolveActiveAssigneeAsync(id);
+        if (denied is not null) return denied;
+
+        var result = await _jobService.DeleteWorkRecordAsync(id, recordId, technicianId);
+
+        if (result.Error is ServiceError.JobNotFound or ServiceError.WorkRecordNotFound)
+        {
+            return NotFound();
+        }
+
+        if (result.Error == ServiceError.NotTheAssignee)
+            return NotTheAssignee();
+
+        if (result.Error == ServiceError.JobNotInProgress)
+        {
+            return Conflict(new ProblemDetails
+            {
+                Title = "Job is not in progress.",
+                Detail = "Work records can only be deleted from a job in status IN_PROGRESS.",
+                Status = StatusCodes.Status409Conflict
+            });
+        }
+
+        return NoContent();
     }
 
     private static ValidationProblemDetails InvalidFilter(string field, string message) =>

@@ -9,7 +9,26 @@ public enum ServiceError
     AssetNotFound = 1,
     CustomerMismatch = 2,
     AssetInactive = 3,
-    CustomerInactive = 4
+    CustomerInactive = 4,
+
+    // StartJobAsync failures. Named after the business rule that fired so the
+    // controller can return the right HTTP status code and problem body for each.
+    JobNotFound = 5,
+    // The job exists but its current status does not allow the requested
+    // transition, e.g. trying to start a CREATED or already IN_PROGRESS job.
+    NotAssigned = 6,
+    // The caller supplied a technician id that does not match the active assignee.
+    NotTheAssignee = 7,
+
+    // AddWorkRecordAsync failures.
+    // The job exists and the technician is assigned, but the job is not in IN_PROGRESS status.
+    JobNotInProgress = 8,
+    // Work record content was empty or whitespace.
+    MissingContent = 9,
+    // The requested work record does not exist or belongs to another job.
+    WorkRecordNotFound = 10,
+    // CompleteJobAsync failure: at least one service work record must exist before completing a job.
+    WorkRecordsRequired = 11
 }
 
 // Expected failures are returned, not thrown, so the controller's branching is

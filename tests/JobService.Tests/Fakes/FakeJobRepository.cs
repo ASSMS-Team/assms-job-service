@@ -126,9 +126,162 @@ public class FakeJobRepository : IJobRepository
 
         return Task.FromResult(ApplyAssignmentResult);
     }
+
+    // StartJobAsync
+    public string? StartJobAsyncCalledWithJobId;
+    public string? StartJobAsyncCalledWithTechnicianId;
+    public DateTime? StartJobAsyncCalledWithStartedAt;
+    public int StartJobAsyncCallCount;
+
+    // True by default: the guarded UPDATE matched and the row changed.
+    // Set to false to simulate the guard firing (wrong status / wrong technician
+    // / no such job), which is the branch that triggers the read-back.
+    public bool StartJobAsyncResult = true;
+
+    public Task<bool> StartJobAsync(string jobId, string technicianId, DateTime startedAt)
+    {
+        StartJobAsyncCalledWithJobId = jobId;
+        StartJobAsyncCalledWithTechnicianId = technicianId;
+        StartJobAsyncCalledWithStartedAt = startedAt;
+        StartJobAsyncCallCount++;
+
+        return Task.FromResult(StartJobAsyncResult);
+    }
+
+    public bool CompleteJobAsyncResult = true;
+    public string? CompleteJobAsyncCalledWithJobId;
+    public string? CompleteJobAsyncCalledWithTechnicianId;
+    public DateTime? CompleteJobAsyncCalledWithCompletedAt;
+    public int CompleteJobAsyncCallCount;
+
+    public Task<bool> CompleteJobAsync(string jobId, string technicianId, DateTime completedAt)
+    {
+        CompleteJobAsyncCalledWithJobId = jobId;
+        CompleteJobAsyncCalledWithTechnicianId = technicianId;
+        CompleteJobAsyncCalledWithCompletedAt = completedAt;
+        CompleteJobAsyncCallCount++;
+
+        if (CompleteJobAsyncResult && JobToReturn is not null)
+        {
+            JobToReturn.Status = "COMPLETED";
+            JobToReturn.CompletedAt = completedAt;
+        }
+
+        return Task.FromResult(CompleteJobAsyncResult);
+    }
+
+
+    // AddWorkRecordAsync & GetWorkRecordsByJobIdAsync
+    public readonly List<ServiceWorkRecord> StoredWorkRecords = new();
+    public ServiceWorkRecord? LastAddedWorkRecord;
+    public int AddWorkRecordCallCount;
+
+    public Task<ServiceWorkRecord> AddWorkRecordAsync(ServiceWorkRecord record)
+    {
+        StoredWorkRecords.Add(record);
+        LastAddedWorkRecord = record;
+        AddWorkRecordCallCount++;
+        return Task.FromResult(record);
+    }
+
+    public Task<IReadOnlyList<ServiceWorkRecord>> GetWorkRecordsByJobIdAsync(string jobId)
+    {
+        IReadOnlyList<ServiceWorkRecord> list = StoredWorkRecords
+            .Where(r => r.JobId == jobId)
+            .OrderBy(r => r.RecordedAt)
+            .ToList();
+        return Task.FromResult(list);
+    }
+
+    public Task<bool> UpdateWorkRecordAsync(string recordId, string jobId, string content)
+    {
+        var record = StoredWorkRecords.FirstOrDefault(item => item.Id == recordId && item.JobId == jobId);
+        if (record is null)
+        {
+            return Task.FromResult(false);
+        }
+
+        record.Content = content;
+        return Task.FromResult(true);
+    }
+
+    public Task<bool> DeleteWorkRecordAsync(string recordId, string jobId)
+    {
+        var record = StoredWorkRecords.FirstOrDefault(item => item.Id == recordId && item.JobId == jobId);
+        if (record is null)
+        {
+            return Task.FromResult(false);
+        }
+
+        StoredWorkRecords.Remove(record);
+        return Task.FromResult(true);
+    }
+
+    public List<JobStatusHistory> StoredStatusHistories = new();
+
+    public Task AddStatusHistoryAsync(JobStatusHistory history)
+    {
+        StoredStatusHistories.Add(history);
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyList<JobStatusHistory>> GetStatusHistoryAsync(string jobId)
+    {
+        IReadOnlyList<JobStatusHistory> list = StoredStatusHistories
+            .Where(h => h.JobId == jobId)
+            .OrderBy(h => h.CreatedAt)
+            .ToList();
+        return Task.FromResult(list);
+    }
+
+    public readonly List<JobStatusOutboxRecord> OutboxRecords = new();
+    public int InsertJobStatusOutboxAsyncCallCount;
+    public int MarkJobStatusOutboxPublishedAsyncCallCount;
+    public int MarkJobStatusOutboxFailedAsyncCallCount;
+    public readonly List<string> PublishedEventIds = new();
+    public readonly List<(string EventId, string Error)> FailedEvents = new();
+
+    public Task InsertJobStatusOutboxAsync(JobStatusOutboxRecord record, CancellationToken cancellationToken = default)
+    {
+        InsertJobStatusOutboxAsyncCallCount++;
+        OutboxRecords.Add(record);
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyList<JobStatusOutboxRecord>> GetPendingJobStatusOutboxEventsAsync(int limit, CancellationToken cancellationToken = default)
+    {
+        var pending = OutboxRecords.Where(r => r.PublishedAt == null).Take(limit).ToList();
+        return Task.FromResult<IReadOnlyList<JobStatusOutboxRecord>>(pending);
+    }
+
+    public Task MarkJobStatusOutboxPublishedAsync(string id, DateTime publishedAt, CancellationToken cancellationToken = default)
+    {
+        MarkJobStatusOutboxPublishedAsyncCallCount++;
+        PublishedEventIds.Add(id);
+        var existing = OutboxRecords.FirstOrDefault(r => r.Id == id);
+        if (existing is not null)
+        {
+            var idx = OutboxRecords.IndexOf(existing);
+            OutboxRecords[idx] = existing with { PublishedAt = publishedAt, PublishAttempts = existing.PublishAttempts + 1, LastError = null };
+        }
+        return Task.CompletedTask;
+    }
+
+    public Task MarkJobStatusOutboxFailedAsync(string id, string error, CancellationToken cancellationToken = default)
+    {
+        MarkJobStatusOutboxFailedAsyncCallCount++;
+        FailedEvents.Add((id, error));
+        var existing = OutboxRecords.FirstOrDefault(r => r.Id == id);
+        if (existing is not null)
+        {
+            var idx = OutboxRecords.IndexOf(existing);
+            OutboxRecords[idx] = existing with { PublishAttempts = existing.PublishAttempts + 1, LastError = error };
+        }
+        return Task.CompletedTask;
+    }
 }
 
-// One recorded ApplyAssignmentAsync call. A record rather than the Job model:
+// One recorded AppliedAssignment call. A record rather than the Job model:
 // these are the arguments the consumer mapped out of an event, and asserting on
 // them is how the mapping is pinned.
 public record AppliedAssignment(

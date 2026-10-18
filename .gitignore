@@ -27,3 +27,7 @@ publish/
 *.log
 .DS_Store
 Thumbs.db
+
+# Local ASE analysis output
+.sonarqube/
+quality/artifacts/

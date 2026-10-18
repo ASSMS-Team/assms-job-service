@@ -1,8 +1,10 @@
+using System.Text.Json;
 using JobService.DTOs;
 using JobService.Extensions;
 using JobService.Messaging.Contracts;
 using JobService.Messaging.Producers;
 using JobService.Models;
+using JobService.Observability;
 using JobService.Repositories;
 
 using MySqlConnector;
@@ -26,6 +28,12 @@ public class JobService
     private const string UnattributedCreatedBy = "00000000-0000-0000-0000-000000000000";
 
     private const string CreatedStatus = "CREATED";
+
+    private const string AssignedStatus = "ASSIGNED";
+
+    private const string InProgressStatus = "IN_PROGRESS";
+
+    private const string CompletedStatus = "COMPLETED";
 
     private readonly IJobRepository _repository;
     // customerdb belongs to another service, so whether the asset and customer
@@ -86,6 +94,16 @@ public class JobService
 
         await PublishJobCreatedAsync(created);
 
+        await _repository.AddStatusHistoryAsync(new JobStatusHistory
+        {
+            Id = Guid.NewGuid().ToString(),
+            JobId = created.Id,
+            PreviousStatus = null,
+            NewStatus = created.Status,
+            ActorId = UnattributedCreatedBy,
+            CreatedAt = created.CreatedAt
+        });
+
         return Result<JobResponse>.Success(MapToResponse(created));
     }
 
@@ -109,6 +127,240 @@ public class JobService
         return jobs.Select(MapToResponse).ToList();
     }
 
+    // Transitions a job from ASSIGNED to IN_PROGRESS on behalf of the active
+    // assignee. The repository's guarded UPDATE is the single source of truth
+    // for every business rule: if it returns false, the row is read back to
+    // determine which rule fired.
+    public async Task<Result<JobResponse>> StartJobAsync(string jobId, string callerTechnicianId)
+    {
+        var startedAt = DateTime.UtcNow;
+
+        var changed = await _repository.StartJobAsync(jobId, callerTechnicianId, startedAt);
+
+        if (!changed)
+        {
+            // Read once to distinguish the three reasons the guard can fire.
+            var existing = await _repository.GetByIdAsync(jobId);
+
+            if (existing is null)
+                return Result<JobResponse>.Failure(ServiceError.JobNotFound);
+
+            if (existing.Status != AssignedStatus)
+                return Result<JobResponse>.Failure(ServiceError.NotAssigned);
+
+            // The job is ASSIGNED, so the only remaining reason the UPDATE
+            // matched nothing is that the caller is not the active assignee.
+            return Result<JobResponse>.Failure(ServiceError.NotTheAssignee);
+        }
+
+        // Read the updated row back so the response carries the database
+        // timestamps rather than the values we computed in memory.
+        var updated = await _repository.GetByIdAsync(jobId) ?? throw new InvalidOperationException(
+            $"Job {jobId} was just updated to IN_PROGRESS but could not be read back.");
+
+        await PublishJobStatusChangedAsync(updated, oldStatus: AssignedStatus);
+
+        JobMetrics.StatusTransitionsTotal.WithLabels(AssignedStatus, InProgressStatus).Inc();
+
+        await _repository.AddStatusHistoryAsync(new JobStatusHistory
+        {
+            Id = Guid.NewGuid().ToString(),
+            JobId = updated.Id,
+            PreviousStatus = AssignedStatus,
+            NewStatus = updated.Status,
+            ActorId = callerTechnicianId,
+            CreatedAt = updated.UpdatedAt // Not exactly started_at, but updated_at moves simultaneously
+        });
+
+        return Result<JobResponse>.Success(MapToResponse(updated));
+    }
+
+    // Transitions a job from IN_PROGRESS to COMPLETED on behalf of the active assignee.
+    // Requires at least one service work record to exist before completion.
+    public async Task<Result<JobResponse>> CompleteJobAsync(string jobId, string callerTechnicianId)
+    {
+        var existing = await _repository.GetByIdAsync(jobId);
+
+        if (existing is null)
+            return Result<JobResponse>.Failure(ServiceError.JobNotFound);
+
+        if (existing.Status != InProgressStatus)
+            return Result<JobResponse>.Failure(ServiceError.JobNotInProgress);
+
+        if (!string.Equals(existing.AssignedTechnicianId, callerTechnicianId, StringComparison.OrdinalIgnoreCase))
+            return Result<JobResponse>.Failure(ServiceError.NotTheAssignee);
+
+        var workRecords = await _repository.GetWorkRecordsByJobIdAsync(jobId);
+        if (workRecords.Count == 0)
+        {
+            return Result<JobResponse>.Failure(ServiceError.WorkRecordsRequired);
+        }
+
+        var completedAt = DateTime.UtcNow;
+        var changed = await _repository.CompleteJobAsync(jobId, callerTechnicianId, completedAt);
+
+        if (!changed)
+        {
+            return Result<JobResponse>.Failure(ServiceError.JobNotInProgress);
+        }
+
+        var updated = await _repository.GetByIdAsync(jobId) ?? throw new InvalidOperationException(
+            $"Job {jobId} was just updated to COMPLETED but could not be read back.");
+
+        await PublishJobStatusChangedAsync(updated, oldStatus: InProgressStatus);
+
+        JobMetrics.StatusTransitionsTotal.WithLabels(InProgressStatus, CompletedStatus).Inc();
+        JobMetrics.JobCompletionsTotal.WithLabels(updated.ServiceCategory, updated.Priority).Inc();
+
+        await _repository.AddStatusHistoryAsync(new JobStatusHistory
+        {
+            Id = Guid.NewGuid().ToString(),
+            JobId = updated.Id,
+            PreviousStatus = InProgressStatus,
+            NewStatus = updated.Status,
+            ActorId = callerTechnicianId,
+            CreatedAt = completedAt
+        });
+
+        return Result<JobResponse>.Success(MapToResponse(updated));
+    }
+
+    /// <summary>
+    /// Records work performed by the active assignee on an IN_PROGRESS job.
+    /// Rejects requests with missing content, unassigned/wrong technician, or non-IN_PROGRESS status.
+    /// </summary>
+    public async Task<Result<ServiceWorkRecordResponse>> AddWorkRecordAsync(
+        string jobId,
+        string callerTechnicianId,
+        string content)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            return Result<ServiceWorkRecordResponse>.Failure(ServiceError.MissingContent);
+        }
+
+        var job = await _repository.GetByIdAsync(jobId);
+        if (job is null)
+        {
+            return Result<ServiceWorkRecordResponse>.Failure(ServiceError.JobNotFound);
+        }
+
+        if (job.Status != InProgressStatus)
+        {
+            return Result<ServiceWorkRecordResponse>.Failure(ServiceError.JobNotInProgress);
+        }
+
+        if (!string.Equals(job.AssignedTechnicianId, callerTechnicianId, StringComparison.OrdinalIgnoreCase))
+        {
+            return Result<ServiceWorkRecordResponse>.Failure(ServiceError.NotTheAssignee);
+        }
+
+        var now = DateTime.UtcNow;
+        var record = new ServiceWorkRecord
+        {
+            Id = Guid.NewGuid().ToString(),
+            JobId = job.Id,
+            JobReference = job.JobReference,
+            TechnicianId = callerTechnicianId,
+            TechnicianReference = job.AssignedTechnicianReference ?? string.Empty,
+            Content = content.Trim(),
+            RecordedAt = now,
+            CreatedAt = now
+        };
+
+        var persisted = await _repository.AddWorkRecordAsync(record);
+        return Result<ServiceWorkRecordResponse>.Success(MapToWorkRecordResponse(persisted));
+    }
+
+    /// <summary>
+    /// Retrieves all service work records for a given job. Returns null if the job does not exist.
+    /// </summary>
+    public async Task<IReadOnlyList<ServiceWorkRecordResponse>?> GetWorkRecordsAsync(string jobId)
+    {
+        var job = await _repository.GetByIdAsync(jobId);
+        if (job is null)
+        {
+            return null;
+        }
+
+        var records = await _repository.GetWorkRecordsByJobIdAsync(jobId);
+        return records.Select(MapToWorkRecordResponse).ToList();
+    }
+
+    /// <summary>Updates a work record belonging to the active assignee's in-progress job.</summary>
+    public async Task<Result<ServiceWorkRecordResponse>> UpdateWorkRecordAsync(
+        string jobId,
+        string recordId,
+        string callerTechnicianId,
+        string content)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            return Result<ServiceWorkRecordResponse>.Failure(ServiceError.MissingContent);
+        }
+
+        var job = await _repository.GetByIdAsync(jobId);
+        if (job is null)
+        {
+            return Result<ServiceWorkRecordResponse>.Failure(ServiceError.JobNotFound);
+        }
+
+        if (job.Status != InProgressStatus)
+        {
+            return Result<ServiceWorkRecordResponse>.Failure(ServiceError.JobNotInProgress);
+        }
+
+        if (!string.Equals(job.AssignedTechnicianId, callerTechnicianId, StringComparison.OrdinalIgnoreCase))
+        {
+            return Result<ServiceWorkRecordResponse>.Failure(ServiceError.NotTheAssignee);
+        }
+
+        var updated = await _repository.UpdateWorkRecordAsync(recordId, jobId, content.Trim());
+        if (!updated)
+        {
+            return Result<ServiceWorkRecordResponse>.Failure(ServiceError.WorkRecordNotFound);
+        }
+
+        var records = await _repository.GetWorkRecordsByJobIdAsync(jobId);
+        var record = records.FirstOrDefault(item => item.Id == recordId);
+        if (record is null)
+        {
+            return Result<ServiceWorkRecordResponse>.Failure(ServiceError.WorkRecordNotFound);
+        }
+
+        return Result<ServiceWorkRecordResponse>.Success(MapToWorkRecordResponse(record));
+    }
+
+    /// <summary>
+    /// Deletes a draft work record from an in-progress job. Only the active assignee may delete it.
+    /// </summary>
+    public async Task<Result<bool>> DeleteWorkRecordAsync(string jobId, string recordId, string callerTechnicianId)
+    {
+        var job = await _repository.GetByIdAsync(jobId);
+        if (job is null)
+        {
+            return Result<bool>.Failure(ServiceError.JobNotFound);
+        }
+
+        if (job.Status != InProgressStatus)
+        {
+            return Result<bool>.Failure(ServiceError.JobNotInProgress);
+        }
+
+        if (!string.Equals(job.AssignedTechnicianId, callerTechnicianId, StringComparison.OrdinalIgnoreCase))
+        {
+            return Result<bool>.Failure(ServiceError.NotTheAssignee);
+        }
+
+        var deleted = await _repository.DeleteWorkRecordAsync(recordId, jobId);
+        if (!deleted)
+        {
+            return Result<bool>.Failure(ServiceError.WorkRecordNotFound);
+        }
+
+        return Result<bool>.Success(true);
+    }
+
     // Generates a reference and inserts, treating a duplicate-key failure as a
     // reason to draw a new reference rather than as an error. The unique index
     // is what detects the collision - there is no pre-check, because two
@@ -119,7 +371,7 @@ public class JobService
     // into a business error would hide it. The exception surfaces as a 500.
     private async Task InsertWithFreshReferenceAsync(Job job)
     {
-        for (var attempt = 1; ; attempt++)
+        for (var attempt = 1; attempt <= MaxCreateAttempts; attempt++)
         {
             job.JobReference = JobReferenceGenerator.Generate();
 
@@ -138,6 +390,8 @@ public class JobService
                     MaxCreateAttempts);
             }
         }
+
+        throw new InvalidOperationException("Job creation ended without a result.");
     }
 
     // The job is already committed by the time this runs. A messaging failure
@@ -183,6 +437,135 @@ public class JobService
         }
     }
 
+    // The same fire-and-forget pattern as PublishJobCreatedAsync: the status
+    // transition is committed before this runs, so a broker failure must not
+    // roll it back or surface as an error to the caller.
+    // jobdb stores UTC, but a value read back without a Kind would otherwise
+    // serialize with no designator and consumers would reject the event.
+    private static DateTime AsUtc(DateTime value) =>
+        value.Kind == DateTimeKind.Unspecified ? DateTime.SpecifyKind(value, DateTimeKind.Utc) : value.ToUniversalTime();
+
+    private static readonly JsonSerializerOptions OutboxSerializerOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
+
+    private async Task PublishJobStatusChangedAsync(Job job, string oldStatus)
+    {
+        var payload = new JobStatusChangedPayload
+        {
+            JobId = job.Id,
+            JobReference = job.JobReference,
+            AssignmentId = job.AssignmentId,
+            TechnicianId = job.AssignedTechnicianId,
+            TechnicianReference = job.AssignedTechnicianReference,
+            OldStatus = oldStatus,
+            NewStatus = job.Status,
+            // Use the stored completed_at / started_at rather than a fresh UtcNow so the
+            // event's business time matches what is in the database. Consumers require
+            // a UTC timestamp (serialized with Z); jobdb timestamps are UTC.
+            OccurredAt = AsUtc((job.Status == CompletedStatus ? job.CompletedAt : job.StartedAt) ?? DateTime.UtcNow)
+        };
+
+        var outboxId = Guid.NewGuid().ToString();
+        var envelope = new EventEnvelope<JobStatusChangedPayload>
+        {
+            EventId = outboxId,
+            EventType = JobStatusChangedPayload.EventType,
+            EventVersion = JobStatusChangedPayload.EventVersion,
+            OccurredAt = payload.OccurredAt,
+            Producer = KafkaEventPublisher.ProducerName,
+            Payload = payload
+        };
+
+        var serializedPayload = JsonSerializer.Serialize(envelope, OutboxSerializerOptions);
+
+        var outboxRecord = new JobStatusOutboxRecord
+        {
+            Id = outboxId,
+            JobId = job.Id,
+            EventType = JobStatusChangedPayload.EventType,
+            Topic = JobStatusChangedPayload.Topic,
+            Payload = serializedPayload,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        try
+        {
+            await _repository.InsertJobStatusOutboxAsync(outboxRecord);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to persist JobStatusChanged outbox record for job {JobId}.", job.Id);
+        }
+
+        try
+        {
+            await _eventPublisher.PublishAsync(
+                JobStatusChangedPayload.Topic,
+                JobStatusChangedPayload.EventType,
+                JobStatusChangedPayload.EventVersion,
+                job.Id,
+                payload);
+
+            try
+            {
+                await _repository.MarkJobStatusOutboxPublishedAsync(outboxId, DateTime.UtcNow);
+            }
+            catch (Exception dbEx)
+            {
+                _logger.LogWarning(dbEx, "Failed to mark outbox event {OutboxId} as published.", outboxId);
+            }
+
+            JobMetrics.StatusEventsPublishedTotal.WithLabels(JobStatusChangedPayload.EventType, "success").Inc();
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                await _repository.MarkJobStatusOutboxFailedAsync(outboxId, ex.Message);
+            }
+            catch (Exception dbEx)
+            {
+                _logger.LogWarning(dbEx, "Failed to update outbox failure status for event {OutboxId}.", outboxId);
+            }
+
+            JobMetrics.StatusEventsPublishedTotal.WithLabels(JobStatusChangedPayload.EventType, "failed").Inc();
+
+            _logger.LogError(
+                ex,
+                "Job {JobId} ({JobReference}) was transitioned to {NewStatus} but the {EventType} event could not be published immediately. It remains queued in outbox for retry.",
+                job.Id,
+                job.JobReference,
+                job.Status,
+                JobStatusChangedPayload.EventType);
+        }
+    }
+
+    /// <summary>
+    /// Retrieves the status history of a job. Returns null if the job does not exist.
+    /// </summary>
+    public async Task<IReadOnlyList<JobStatusHistoryResponse>?> GetStatusHistoryAsync(string jobId)
+    {
+        var job = await _repository.GetByIdAsync(jobId);
+        if (job is null)
+        {
+            return null;
+        }
+
+        var history = await _repository.GetStatusHistoryAsync(jobId);
+
+        return history.Select(h => new JobStatusHistoryResponse
+        {
+            Id = h.Id,
+            JobId = h.JobId,
+            PreviousStatus = h.PreviousStatus,
+            NewStatus = h.NewStatus,
+            ActorId = h.ActorId,
+            CreatedAt = h.CreatedAt
+        }).ToList();
+    }
+
     private static ServiceError MapValidationOutcome(AssetValidationOutcome outcome) => outcome switch
     {
         AssetValidationOutcome.AssetNotFound => ServiceError.AssetNotFound,
@@ -217,7 +600,22 @@ public class JobService
                 TechnicianReference = job.AssignedTechnicianReference,
                 AssignedAt = job.AssignedAt.Value
             },
+        StartedAt = job.StartedAt,
+        CompletedAt = job.CompletedAt,
         CreatedAt = job.CreatedAt,
         UpdatedAt = job.UpdatedAt
     };
+
+    private static ServiceWorkRecordResponse MapToWorkRecordResponse(ServiceWorkRecord record) => new()
+    {
+        Id = record.Id,
+        JobId = record.JobId,
+        JobReference = record.JobReference,
+        TechnicianId = record.TechnicianId,
+        TechnicianReference = record.TechnicianReference,
+        Content = record.Content,
+        RecordedAt = record.RecordedAt,
+        CreatedAt = record.CreatedAt
+    };
 }
+
