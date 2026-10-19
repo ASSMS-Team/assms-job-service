@@ -1,0 +1,27 @@
+{
+  "stryker-config": {
+    "solution": "JobService.sln",
+    "project": "JobService.csproj",
+    "test-projects": [
+      "tests/JobService.Tests/JobService.Tests.csproj"
+    ],
+    "reporters": [ "html", "json", "progress", "cleartext" ],
+    "coverage-analysis": "perTest",
+    "mutation-level": "Standard",
+    "thresholds": { "high": 80, "low": 60, "break": 0 },
+    "mutate": [
+      "**/*.cs",
+      "!**/Program.cs",
+      "!**/Services/JobMigrationRunner.cs",
+      "!**/Repositories/JobRepository.cs",
+      "!**/Repositories/MySqlConnectionFactory.cs",
+      "!**/Messaging/Producers/KafkaEventPublisher.cs",
+      "!**/Security/AuthorizeOperationFilter.cs",
+      "!**/Controllers/HealthController.cs",
+      "!**/Observability/JobMetrics.cs"
+    ],
+    "ignore-methods": [
+      "*.LogTrace", "*.LogDebug", "*.LogInformation", "*.LogWarning", "*.LogError", "*.LogCritical"
+    ]
+  }
+}
