@@ -1,0 +1,41 @@
+name: Mutation testing
+
+# Stryker.NET mutation testing of the unit test suite (ASE test automation).
+# Runs on every push to the mutation-testing branch, or manually from the
+# Actions tab. Uses the same script as a local run.
+on:
+  push:
+    branches:
+      - test/ase-mutation
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mutation-testing:
+    name: Stryker.NET mutation testing
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Run mutation tests
+        shell: pwsh
+        run: ./quality/mutation/run-mutation-tests.ps1
+
+      - name: Upload mutation report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mutation-report-${{ github.event.repository.name }}
+          path: mutation-reports/latest/**
+          if-no-files-found: warn
+          retention-days: 30

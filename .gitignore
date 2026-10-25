@@ -31,3 +31,7 @@ Thumbs.db
 # Local ASE analysis output
 .sonarqube/
 quality/artifacts/
+
+# Stryker.NET mutation testing reports (generated per run)
+mutation-reports/
+StrykerOutput/
